@@ -7,6 +7,7 @@ const envs = require("../build/compat-table/environments");
 const parseEnvsVersions = require("../build/compat-table/build-utils/parse-envs-versions");
 const interpolateAllResults = require("../build/compat-table/build-utils/interpolate-all-results");
 const compareVersions = require("../build/compat-table/build-utils/compare-versions");
+const legacyPluginAliases = require("./data/legacy-plugin-aliases");
 
 const envsVersions = parseEnvsVersions(envs);
 
@@ -25,6 +26,7 @@ exports.environments = [
   "firefox",
   "safari",
   "node",
+  "deno",
   "ie",
   "android",
   "ios",
@@ -46,7 +48,7 @@ const compatibilityTests = compatSources.flatMap(data =>
   })
 );
 
-exports.getLowestImplementedVersion = (
+const getLowestImplementedVersion = (
   { features },
   env,
   exclude = () => false
@@ -88,21 +90,54 @@ exports.getLowestImplementedVersion = (
   return result.version.join(".").replace(/\.0$/, "");
 };
 
+const expandFeatures = features =>
+  features.flatMap(feat => {
+    if (feat.includes("/")) return [feat];
+    return compatibilityTests
+      .map(test => test.name)
+      .filter(name => name === feat || name.startsWith(feat + " / "));
+  });
+
 exports.generateData = (environments, features) => {
   const data = {};
 
-  // eslint-disable-next-line prefer-const
-  for (let [key, options] of Object.entries(features)) {
+  const normalized = {};
+  for (const [key, options] of Object.entries(features)) {
     if (!options.features) {
-      options = {
-        features: [options],
+      normalized[key] = {
+        features: expandFeatures([options]),
+      };
+    } else {
+      normalized[key] = {
+        ...options,
+        features: expandFeatures(options.features),
       };
     }
+  }
 
+  const overlapping = {};
+
+  // Apply bugfixes
+  for (const [key, { features, replaces }] of Object.entries(normalized)) {
+    if (replaces) {
+      if (normalized[replaces].replaces) {
+        throw new Error("Transitive replacement is not supported");
+      }
+      normalized[replaces].features = normalized[replaces].features.filter(
+        feat => !features.includes(feat)
+      );
+
+      if (!overlapping[replaces]) overlapping[replaces] = [];
+      overlapping[replaces].push(key);
+    }
+  }
+
+  // eslint-disable-next-line prefer-const
+  for (let [key, options] of Object.entries(normalized)) {
     const plugin = {};
 
     environments.forEach(env => {
-      const version = exports.getLowestImplementedVersion(options, env);
+      const version = getLowestImplementedVersion(options, env);
       if (version) plugin[env] = version;
     });
     addElectronSupportFromChromium(plugin);
@@ -110,7 +145,7 @@ exports.generateData = (environments, features) => {
     data[key] = plugin;
   }
 
-  return data;
+  return { data, overlapping };
 };
 
 exports.writeFile = function (data, dataPath, name) {
@@ -131,4 +166,18 @@ exports.writeFile = function (data, dataPath, name) {
     fs.writeFileSync(dataPath, stringified);
   }
   return true;
+};
+
+// TODO(Babel 8): Remove this.
+exports.defineLegacyPluginAliases = function (data) {
+  // We create a new object to inject legacy aliases in the correct
+  // order, rather than all at the end.
+  const result = {};
+  for (const key in data) {
+    result[key] = data[key];
+    if (key in legacyPluginAliases) {
+      result[legacyPluginAliases[key]] = data[key];
+    }
+  }
+  return result;
 };

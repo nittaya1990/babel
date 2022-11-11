@@ -5,6 +5,7 @@ import syntaxClassProperties from "@babel/plugin-syntax-class-properties";
 import syntaxClassStaticBlock from "@babel/plugin-syntax-class-static-block";
 import syntaxDynamicImport from "@babel/plugin-syntax-dynamic-import";
 import syntaxExportNamespaceFrom from "@babel/plugin-syntax-export-namespace-from";
+import syntaxImportAssertions from "@babel/plugin-syntax-import-assertions";
 import syntaxJsonStrings from "@babel/plugin-syntax-json-strings";
 import syntaxLogicalAssignmentOperators from "@babel/plugin-syntax-logical-assignment-operators";
 import syntaxNullishCoalescingOperator from "@babel/plugin-syntax-nullish-coalescing-operator";
@@ -68,6 +69,7 @@ import bugfixEdgeFunctionName from "@babel/preset-modules/lib/plugins/transform-
 import bugfixTaggedTemplateCaching from "@babel/preset-modules/lib/plugins/transform-tagged-template-caching";
 import bugfixSafariBlockShadowing from "@babel/preset-modules/lib/plugins/transform-safari-block-shadowing";
 import bugfixSafariForShadowing from "@babel/preset-modules/lib/plugins/transform-safari-for-shadowing";
+import bugfixSafariIdDestructuringCollisionInFunctionExpression from "@babel/plugin-bugfix-safari-id-destructuring-collision-in-function-expression";
 import bugfixV8SpreadParametersInOptionalChaining from "@babel/plugin-bugfix-v8-spread-parameters-in-optional-chaining";
 
 export default {
@@ -76,31 +78,17 @@ export default {
   "bugfix/transform-edge-function-name": () => bugfixEdgeFunctionName,
   "bugfix/transform-safari-block-shadowing": () => bugfixSafariBlockShadowing,
   "bugfix/transform-safari-for-shadowing": () => bugfixSafariForShadowing,
+  "bugfix/transform-safari-id-destructuring-collision-in-function-expression":
+    () => bugfixSafariIdDestructuringCollisionInFunctionExpression,
   "bugfix/transform-tagged-template-caching": () => bugfixTaggedTemplateCaching,
   "bugfix/transform-v8-spread-parameters-in-optional-chaining": () =>
     bugfixV8SpreadParametersInOptionalChaining,
-  "proposal-async-generator-functions": () => proposalAsyncGeneratorFunctions,
-  "proposal-class-properties": () => proposalClassProperties,
-  "proposal-class-static-block": () => proposalClassStaticBlock,
-  "proposal-dynamic-import": () => proposalDynamicImport,
-  "proposal-export-namespace-from": () => proposalExportNamespaceFrom,
-  "proposal-json-strings": () => proposalJsonStrings,
-  "proposal-logical-assignment-operators": () =>
-    proposalLogicalAssignmentOperators,
-  "proposal-nullish-coalescing-operator": () =>
-    proposalNullishCoalescingOperator,
-  "proposal-numeric-separator": () => proposalNumericSeparator,
-  "proposal-object-rest-spread": () => proposalObjectRestSpread,
-  "proposal-optional-catch-binding": () => proposalOptionalCatchBinding,
-  "proposal-optional-chaining": () => proposalOptionalChaining,
-  "proposal-private-methods": () => proposalPrivateMethods,
-  "proposal-private-property-in-object": () => proposalPrivatePropertyInObject,
-  "proposal-unicode-property-regex": () => proposalUnicodePropertyRegex,
   "syntax-async-generators": () => syntaxAsyncGenerators,
   "syntax-class-properties": () => syntaxClassProperties,
   "syntax-class-static-block": () => syntaxClassStaticBlock,
   "syntax-dynamic-import": () => syntaxDynamicImport,
   "syntax-export-namespace-from": () => syntaxExportNamespaceFrom,
+  "syntax-import-assertions": () => syntaxImportAssertions,
   "syntax-json-strings": () => syntaxJsonStrings,
   "syntax-logical-assignment-operators": () => syntaxLogicalAssignmentOperators,
   "syntax-nullish-coalescing-operator": () => syntaxNullishCoalescingOperator,
@@ -111,18 +99,26 @@ export default {
   "syntax-private-property-in-object": () => syntaxPrivatePropertyInObject,
   "syntax-top-level-await": () => syntaxTopLevelAwait,
   "transform-arrow-functions": () => transformArrowFunctions,
+  "transform-async-generator-functions": () => proposalAsyncGeneratorFunctions,
   "transform-async-to-generator": () => transformAsyncToGenerator,
   "transform-block-scoped-functions": () => transformBlockScopedFunctions,
   "transform-block-scoping": () => transformBlockScoping,
+  "transform-class-properties": () => proposalClassProperties,
+  "transform-class-static-block": () => proposalClassStaticBlock,
   "transform-classes": () => transformClasses,
   "transform-computed-properties": () => transformComputedProperties,
   "transform-destructuring": () => transformDestructuring,
   "transform-dotall-regex": () => transformDotallRegex,
   "transform-duplicate-keys": () => transformDuplicateKeys,
+  "transform-dynamic-import": () => proposalDynamicImport,
   "transform-exponentiation-operator": () => transformExponentialOperator,
+  "transform-export-namespace-from": () => proposalExportNamespaceFrom,
   "transform-for-of": () => transformForOf,
   "transform-function-name": () => transformFunctionName,
+  "transform-json-strings": () => proposalJsonStrings,
   "transform-literals": () => transformLiterals,
+  "transform-logical-assignment-operators": () =>
+    proposalLogicalAssignmentOperators,
   "transform-member-expression-literals": () =>
     transformMemberExpressionLiterals,
   "transform-modules-amd": () => transformModulesAmd,
@@ -132,8 +128,16 @@ export default {
   "transform-named-capturing-groups-regex": () =>
     transformNamedCapturingGroupsRegex,
   "transform-new-target": () => transformNewTarget,
+  "transform-nullish-coalescing-operator": () =>
+    proposalNullishCoalescingOperator,
+  "transform-numeric-separator": () => proposalNumericSeparator,
+  "transform-object-rest-spread": () => proposalObjectRestSpread,
   "transform-object-super": () => transformObjectSuper,
+  "transform-optional-catch-binding": () => proposalOptionalCatchBinding,
+  "transform-optional-chaining": () => proposalOptionalChaining,
   "transform-parameters": () => transformParameters,
+  "transform-private-methods": () => proposalPrivateMethods,
+  "transform-private-property-in-object": () => proposalPrivatePropertyInObject,
   "transform-property-literals": () => transformPropertyLiterals,
   "transform-regenerator": () => transformRegenerator,
   "transform-reserved-words": () => transformReservedWords,
@@ -143,10 +147,13 @@ export default {
   "transform-template-literals": () => transformTemplateLiterals,
   "transform-typeof-symbol": () => transformTypeofSymbol,
   "transform-unicode-escapes": () => transformUnicodeEscapes,
+  "transform-unicode-property-regex": () => proposalUnicodePropertyRegex,
   "transform-unicode-regex": () => transformUnicodeRegex,
 };
 
 export const minVersions = {
-  "proposal-class-static-block": "7.12.0",
-  "proposal-private-property-in-object": "7.10.0",
+  "bugfix/transform-safari-id-destructuring-collision-in-function-expression":
+    "7.16.0",
+  "transform-class-static-block": "7.12.0",
+  "transform-private-property-in-object": "7.10.0",
 };

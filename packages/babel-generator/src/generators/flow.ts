@@ -11,7 +11,7 @@ export function ArrayTypeAnnotation(
   this: Printer,
   node: t.ArrayTypeAnnotation,
 ) {
-  this.print(node.elementType, node);
+  this.print(node.elementType, node, true);
   this.token("[");
   this.token("]");
 }
@@ -48,7 +48,7 @@ export function DeclareClass(
 export function DeclareFunction(
   this: Printer,
   node: t.DeclareFunction,
-  parent: any,
+  parent: t.Node,
 ) {
   if (!isDeclareExportDeclaration(parent)) {
     this.word("declare");
@@ -57,7 +57,7 @@ export function DeclareFunction(
   this.word("function");
   this.space();
   this.print(node.id, node);
-  // @ts-ignore TODO(Babel 8) Remove this comment, since we'll remove the Noop node
+  // @ts-ignore(Babel 7 vs Babel 8) TODO(Babel 8) Remove this comment, since we'll remove the Noop node
   this.print(node.id.typeAnnotation.typeAnnotation, node);
 
   if (node.predicate) {
@@ -68,7 +68,7 @@ export function DeclareFunction(
   this.semicolon();
 }
 
-export function InferredPredicate(/*node: Object*/) {
+export function InferredPredicate(this: Printer) {
   this.token("%");
   this.word("checks");
 }
@@ -118,7 +118,7 @@ export function DeclareTypeAlias(this: Printer, node: t.DeclareTypeAlias) {
 export function DeclareOpaqueType(
   this: Printer,
   node: t.DeclareOpaqueType,
-  parent: any,
+  parent: t.Node,
 ) {
   if (!isDeclareExportDeclaration(parent)) {
     this.word("declare");
@@ -130,7 +130,7 @@ export function DeclareOpaqueType(
 export function DeclareVariable(
   this: Printer,
   node: t.DeclareVariable,
-  parent: any,
+  parent: t.Node,
 ) {
   if (!isDeclareExportDeclaration(parent)) {
     this.word("declare");
@@ -156,13 +156,16 @@ export function DeclareExportDeclaration(
     this.space();
   }
 
-  FlowExportDeclaration.apply(this, arguments);
+  FlowExportDeclaration.call(this, node);
 }
 
-export function DeclareExportAllDeclaration(/*node: Object*/) {
+export function DeclareExportAllDeclaration(
+  this: Printer,
+  node: t.DeclareExportAllDeclaration,
+) {
   this.word("declare");
   this.space();
-  ExportAllDeclaration.apply(this, arguments);
+  ExportAllDeclaration.call(this, node);
 }
 
 export function EnumDeclaration(this: Printer, node: t.EnumDeclaration) {
@@ -174,7 +177,7 @@ export function EnumDeclaration(this: Printer, node: t.EnumDeclaration) {
 }
 
 function enumExplicitType(
-  context: any,
+  context: Printer,
   name: string,
   hasExplicitType: boolean,
 ) {
@@ -187,7 +190,7 @@ function enumExplicitType(
   context.space();
 }
 
-function enumBody(context: any, node: any) {
+function enumBody(context: Printer, node: t.EnumBody) {
   const { members } = node;
   context.token("{");
   context.indent();
@@ -236,7 +239,10 @@ export function EnumDefaultedMember(
   this.token(",");
 }
 
-function enumInitializedMember(context: any, node: any) {
+function enumInitializedMember(
+  context: Printer,
+  node: t.EnumBooleanMember | t.EnumNumberMember | t.EnumStringMember,
+) {
   const { id, init } = node;
   context.print(id, node);
   context.space();
@@ -258,7 +264,10 @@ export function EnumStringMember(this: Printer, node: t.EnumStringMember) {
   enumInitializedMember(this, node);
 }
 
-function FlowExportDeclaration(node: any) {
+function FlowExportDeclaration(
+  this: Printer,
+  node: t.DeclareExportDeclaration,
+) {
   if (node.declaration) {
     const declar = node.declaration;
     this.print(declar, node);
@@ -290,7 +299,7 @@ export function ExistsTypeAnnotation(this: Printer) {
 export function FunctionTypeAnnotation(
   this: Printer,
   node: t.FunctionTypeAnnotation,
-  parent: any,
+  parent: t.Node | void,
 ) {
   this.print(node.typeParameters, node);
   this.token("(");
@@ -321,9 +330,11 @@ export function FunctionTypeAnnotation(
 
   // this node type is overloaded, not sure why but it makes it EXTREMELY annoying
   if (
-    parent.type === "ObjectTypeCallProperty" ||
-    parent.type === "DeclareFunction" ||
-    (parent.type === "ObjectTypeProperty" && parent.method)
+    parent &&
+    (parent.type === "ObjectTypeCallProperty" ||
+      parent.type === "ObjectTypeInternalSlot" ||
+      parent.type === "DeclareFunction" ||
+      (parent.type === "ObjectTypeProperty" && parent.method))
   ) {
     this.token(":");
   } else {
@@ -347,7 +358,7 @@ export function FunctionTypeParam(this: Printer, node: t.FunctionTypeParam) {
 
 export function InterfaceExtends(this: Printer, node: t.InterfaceExtends) {
   this.print(node.id, node);
-  this.print(node.typeParameters, node);
+  this.print(node.typeParameters, node, true);
 }
 
 export {
@@ -383,7 +394,16 @@ export function _interfaceish(
   this.print(node.body, node);
 }
 
-export function _variance(this: Printer, node) {
+export function _variance(
+  this: Printer,
+  node:
+    | t.TypeParameter
+    | t.ObjectTypeIndexer
+    | t.ObjectTypeProperty
+    | t.ClassProperty
+    | t.ClassPrivateProperty
+    | t.ClassAccessorProperty,
+) {
   if (node.variance) {
     if (node.variance.kind === "plus") {
       this.token("+");
@@ -402,7 +422,7 @@ export function InterfaceDeclaration(
   this._interfaceish(node);
 }
 
-function andSeparator() {
+function andSeparator(this: Printer) {
   this.space();
   this.token("&");
   this.space();
@@ -576,6 +596,8 @@ export function ObjectTypeAnnotation(
   ];
 
   if (props.length) {
+    this.newline();
+
     this.space();
 
     this.printJoin(props, node, {
@@ -706,7 +728,7 @@ export function SymbolTypeAnnotation(this: Printer) {
   this.word("symbol");
 }
 
-function orSeparator() {
+function orSeparator(this: Printer) {
   this.space();
   this.token("|");
   this.space();
@@ -739,7 +761,7 @@ export function VoidTypeAnnotation(this: Printer) {
 }
 
 export function IndexedAccessType(this: Printer, node: t.IndexedAccessType) {
-  this.print(node.objectType, node);
+  this.print(node.objectType, node, true);
   this.token("[");
   this.print(node.indexType, node);
   this.token("]");

@@ -1,4 +1,4 @@
-import type { File } from "@babel/core";
+import type { File, types as t } from "@babel/core";
 import type { NodePath } from "@babel/traverse";
 import { hasOwnDecorators } from "./decorators";
 
@@ -6,6 +6,7 @@ export const FEATURES = Object.freeze({
   //classes: 1 << 0,
   fields: 1 << 1,
   privateMethods: 1 << 2,
+  // TODO(Babel 8): Remove this
   decorators: 1 << 3,
   privateIn: 1 << 4,
   staticBlocks: 1 << 5,
@@ -48,14 +49,14 @@ export function enableFeature(file: File, feature: number, loose: boolean) {
   if (!hasFeature(file, feature) || canIgnoreLoose(file, feature)) {
     file.set(featuresKey, file.get(featuresKey) | feature);
     if (
-      // @ts-expect-error
+      // @ts-expect-error comparing loose with internal private magic string
       loose ===
       "#__internal__@babel/preset-env__prefer-true-but-false-is-ok-if-it-prevents-an-error"
     ) {
       setLoose(file, feature, true);
       file.set(looseLowPriorityKey, file.get(looseLowPriorityKey) | feature);
     } else if (
-      // @ts-expect-error
+      // @ts-expect-error comparing loose with internal private magic string
       loose ===
       "#__internal__@babel/preset-env__prefer-false-but-true-is-ok-if-it-prevents-an-error"
     ) {
@@ -126,62 +127,99 @@ function canIgnoreLoose(file: File, feature: number) {
   return !!(file.get(looseLowPriorityKey) & feature);
 }
 
-export function verifyUsedFeatures(path: NodePath, file: File) {
-  if (hasOwnDecorators(path.node)) {
-    if (!hasFeature(file, FEATURES.decorators)) {
-      throw path.buildCodeFrameError(
-        "Decorators are not enabled." +
-          "\nIf you are using " +
-          '["@babel/plugin-proposal-decorators", { "legacy": true }], ' +
-          'make sure it comes *before* "@babel/plugin-proposal-class-properties" ' +
-          "and enable loose mode, like so:\n" +
-          '\t["@babel/plugin-proposal-decorators", { "legacy": true }]\n' +
-          '\t["@babel/plugin-proposal-class-properties", { "loose": true }]',
-      );
-    }
+export function shouldTransform(path: NodePath<t.Class>, file: File): boolean {
+  let decoratorPath: NodePath<t.Decorator> | null = null;
+  let publicFieldPath: NodePath<t.ClassProperty> | null = null;
+  let privateFieldPath: NodePath<t.ClassPrivateProperty> | null = null;
+  let privateMethodPath: NodePath<t.ClassPrivateMethod> | null = null;
+  let staticBlockPath: NodePath<t.StaticBlock> | null = null;
 
-    if (path.isPrivate()) {
-      throw path.buildCodeFrameError(
-        `Private ${
-          path.isClassMethod() ? "methods" : "fields"
-        } in decorated classes are not supported yet.`,
-      );
+  if (hasOwnDecorators(path.node)) {
+    decoratorPath = path.get("decorators.0");
+  }
+  for (const el of path.get("body.body")) {
+    if (!decoratorPath && hasOwnDecorators(el.node)) {
+      decoratorPath = el.get("decorators.0");
+    }
+    if (!publicFieldPath && el.isClassProperty()) {
+      publicFieldPath = el;
+    }
+    if (!privateFieldPath && el.isClassPrivateProperty()) {
+      privateFieldPath = el;
+    }
+    // NOTE: path.isClassPrivateMethod() it isn't supported in <7.2.0
+    if (!privateMethodPath && el.isClassPrivateMethod?.()) {
+      privateMethodPath = el;
+    }
+    if (!staticBlockPath && el.isStaticBlock?.()) {
+      staticBlockPath = el;
     }
   }
 
-  // NOTE: path.isClassPrivateMethod() it isn't supported in <7.2.0
-  if (path.isClassPrivateMethod?.()) {
-    if (!hasFeature(file, FEATURES.privateMethods)) {
-      throw path.buildCodeFrameError("Class private methods are not enabled.");
-    }
+  if (decoratorPath && privateFieldPath) {
+    throw privateFieldPath.buildCodeFrameError(
+      "Private fields in decorated classes are not supported yet.",
+    );
+  }
+  if (decoratorPath && privateMethodPath) {
+    throw privateMethodPath.buildCodeFrameError(
+      "Private methods in decorated classes are not supported yet.",
+    );
+  }
+
+  if (decoratorPath && !hasFeature(file, FEATURES.decorators)) {
+    throw path.buildCodeFrameError(
+      "Decorators are not enabled." +
+        "\nIf you are using " +
+        '["@babel/plugin-proposal-decorators", { "version": "legacy" }], ' +
+        'make sure it comes *before* "@babel/plugin-proposal-class-properties" ' +
+        "and enable loose mode, like so:\n" +
+        '\t["@babel/plugin-proposal-decorators", { "version": "legacy" }]\n' +
+        '\t["@babel/plugin-proposal-class-properties", { "loose": true }]',
+    );
+  }
+
+  if (privateMethodPath && !hasFeature(file, FEATURES.privateMethods)) {
+    throw privateMethodPath.buildCodeFrameError(
+      "Class private methods are not enabled. " +
+        "Please add `@babel/plugin-proposal-private-methods` to your configuration.",
+    );
   }
 
   if (
-    path.isPrivateName() &&
-    path.parentPath.isBinaryExpression({
-      operator: "in",
-      left: path.node,
-    })
+    (publicFieldPath || privateFieldPath) &&
+    !hasFeature(file, FEATURES.fields) &&
+    // We want to allow enabling the private-methods plugin even without enabling
+    // the class-properties plugin. Class fields will still be compiled in classes
+    // that contain private methods.
+    // This is already allowed with the other various class features plugins, but
+    // it's because they can fallback to a transform separated from this helper.
+    !hasFeature(file, FEATURES.privateMethods)
   ) {
-    if (!hasFeature(file, FEATURES.privateIn)) {
-      throw path.buildCodeFrameError(
-        "Private property in checks are not enabled.",
-      );
-    }
+    throw path.buildCodeFrameError(
+      "Class fields are not enabled. " +
+        "Please add `@babel/plugin-proposal-class-properties` to your configuration.",
+    );
   }
 
-  if (path.isProperty()) {
-    if (!hasFeature(file, FEATURES.fields)) {
-      throw path.buildCodeFrameError("Class fields are not enabled.");
-    }
+  if (staticBlockPath && !hasFeature(file, FEATURES.staticBlocks)) {
+    throw path.buildCodeFrameError(
+      "Static class blocks are not enabled. " +
+        "Please add `@babel/plugin-proposal-class-static-block` to your configuration.",
+    );
   }
 
-  if (path.isStaticBlock?.()) {
-    if (!hasFeature(file, FEATURES.staticBlocks)) {
-      throw path.buildCodeFrameError(
-        "Static class blocks are not enabled. " +
-          "Please add `@babel/plugin-proposal-class-static-block` to your configuration.",
-      );
-    }
+  if (decoratorPath || privateMethodPath || staticBlockPath) {
+    // If one of those feature is used we know that its transform is
+    // enabled, otherwise the previous checks throw.
+    return true;
   }
+  if (
+    (publicFieldPath || privateFieldPath) &&
+    hasFeature(file, FEATURES.fields)
+  ) {
+    return true;
+  }
+
+  return false;
 }

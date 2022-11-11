@@ -43,8 +43,8 @@ _Yarn_: Make sure that Yarn 1 is [installed](https://classic.yarnpkg.com/en/docs
 
 _Make_: If you are running Windows 10, you'll need to do one of the following:
 
-- Clone the repository and run the commands inside [WSL 2](https://docs.microsoft.com/en-us/windows/wsl/install-win10).
-- Install [Make for Windows](http://gnuwin32.sourceforge.net/packages/make.htm).
+- Run the commands inside [WSL 2](https://docs.microsoft.com/en-us/windows/wsl/install-win10).
+- Using make normally (`make` or `./make`), it will automatically call the cross-platform `Makefile.mjs`. (There may be a small part of the function not implemented.)
 
 ### Setup
 
@@ -79,6 +79,21 @@ If you wish to build a copy of Babel for distribution, then run:
 ```sh
 $ make build-dist
 ```
+
+## Develop compiling to CommonJS or to ECMAScript modules
+
+Babel can currently be compiled both to CJS and to ESM. You can toggle between those two
+modes by running one of the following commands:
+```sh
+make use-esm
+```
+```sh
+make use-cjs
+```
+
+Note that they need to recompile the whole monorepo, so please make sure to stop any running `make watch` process before running them.
+
+If you never run a `make use-*` (or if you delete the `.module-type` file that they generate), our build process defaults to CJS.
 
 ### Running linting/tests
 
@@ -121,16 +136,17 @@ $ TEST_ONLY=babel-cli make test
   <summary>More options</summary>
   <code>TEST_ONLY</code> will also match substrings of the package name:
 
-  ```sh
-  # Run tests for the @babel/plugin-transform-classes package.
-  $ TEST_ONLY=babel-plugin-transform-classes make test
-  ```
+```sh
+# Run tests for the @babel/plugin-transform-classes package.
+$ TEST_ONLY=babel-plugin-transform-classes make test
+```
 
-  Or you can use Yarn: 
+Or you can use Yarn:
 
-  ```sh
-  $ yarn jest babel-cli
-  ```
+```sh
+$ yarn jest babel-cli
+```
+
 </details>
 <br>
 
@@ -145,16 +161,19 @@ $ TEST_GREP=transformation make test
 Substitute spaces for hyphens and forward slashes when targeting specific test names:
 
 For example, for the following path:
+
 ```sh
 packages/babel-plugin-transform-arrow-functions/test/fixtures/arrow-functions/destructuring-parameters
 ```
 
 You can use:
+
 ```sh
 $ TEST_GREP="arrow functions destructuring parameters" make test
 ```
 
 Or you can directly use Yarn:
+
 ```sh
 $ yarn jest -t "arrow functions destructuring parameters"
 ```
@@ -169,10 +188,11 @@ $ TEST_DEBUG=true make test
 
 <details>
   <summary>More options</summary>
-  Or you can directly use Yarn
+
+  You can also run `jest` directly, but you must remember to include `--runInBand` or `-i` or you [may not hit breakpoints with the chrome debugger](https://github.com/nodejs/node/issues/26609).
 
   ```sh
-  $ yarn node --inspect-brk node_modules/jest/bin/jest.js --runInBand
+  yarn run --inspect-brk jest -i packages/package-to-test
   ```
 </details>
 <br>
@@ -190,8 +210,7 @@ $ OVERWRITE=true TEST_ONLY=babel-plugin-transform-classes make test-only
 To test the code coverage, use:
 
 ```sh
-$ BABEL_ENV=cov make build
-$ ./scripts/test-cov.sh
+make test-cov
 ```
 
 #### Troubleshooting Tests
@@ -334,6 +353,14 @@ For both `@babel/plugin-x` and `@babel/parser`, you can easily generate an `outp
               - output.json (will be generated if not created)
 ```
 
+#### Editor setup
+
+We have JSON Schema definitions so that your editor can provide autocomplete for `options.json` files in fixtures:
+- `./packages/babel-helper-fixtures/data/schema.json` for plugins/presets tests
+- `./packages/babel-parser/test/schema.json` for parser tests
+
+If you use VS Code you can copy the contents of `.vscode/settings.example.json` into `.vscode/settings.json` to make it use the JSON Schema definitions. Other editors have different options to load JSON Schema files.
+
 ### Debugging code
 
 A common approach to debugging JavaScript code is to walk through the code using the [Chrome DevTools](https://developers.google.com/web/tools/chrome-devtools/) debugger.
@@ -378,7 +405,7 @@ Note that the code shown in Chrome DevTools is compiled code and therefore diffe
 - After the ESTree PR is accepted, update [ast/spec.md](https://github.com/babel/babel/blob/master/packages/babel-parser/ast/spec.md). Note that there are differences between Babel AST and ESTree. In these cases, consistency with current Babel AST outweighs alignment to ESTree. Otherwise it should follow ESTree.
 
 - [ ] Implement parser plugins based on the new AST. The parser plugin name should be the unprefixed slug of the TC39 proposal URL in _camelcase_, i.e. `exportDefaultFrom` from `https://github.com/tc39/proposal-export-default-from`.
-  - [ ] Use the `this.expectPlugin("newSyntax")` check within `@babel/parser` to ensure your new plugin code only runs when that flag is turned on (not default behavior), and a friendly error is thrown if users forget to enable a plugin.
+  - [ ] Use the `this.expectPlugin("pluginName")` check within `@babel/parser` to ensure your new plugin code only runs when that flag is turned on (not default behavior), and a friendly error is thrown if users forget to enable a plugin. You can also supply an array pair to require certain configuration options, e.g., `this.expectPlugin(["pluginName", { configOption: value }])`.
   - [ ] Add failing/passing tests according to spec behavior
   - [ ] Add `@babel/syntax-new-syntax` package. You can copy `packages/babel-plugin-syntax-decimal` and replace `decimal` to `new-syntax`.
   - [ ] Add `@babel/syntax-new-syntax` to `@babel/standalone`.

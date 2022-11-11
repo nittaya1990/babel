@@ -1,6 +1,6 @@
 {
   "name": "@babel/helper-define-map",
-  "version": "7.15.4",
+  "version": "7.18.6",
   "description": "Helper function to define a map",
   "repository": {
     "type": "git",
@@ -14,11 +14,30 @@
   },
   "main": "./lib/index.js",
   "dependencies": {
-    "@babel/helper-function-name": "workspace:^7.15.4",
-    "@babel/types": "workspace:^7.15.4"
+    "@babel/helper-function-name": "workspace:^",
+    "@babel/types": "workspace:^"
   },
   "engines": {
     "node": ">=6.9.0"
   },
-  "author": "The Babel Team (https://babel.dev/team)"
+  "author": "The Babel Team (https://babel.dev/team)",
+  "conditions": {
+    "BABEL_8_BREAKING": [
+      null,
+      {
+        "exports": null
+      }
+    ],
+    "USE_ESM": [
+      {
+        "type": "module"
+      },
+      null
+    ]
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "type": "commonjs"
 }

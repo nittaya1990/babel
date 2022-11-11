@@ -1,15 +1,17 @@
 import path from "path";
 import fs from "fs";
 import { createRequire } from "module";
-import helpers from "@babel/helpers";
-import babel from "@babel/core";
+import * as helpers from "@babel/helpers";
+import { transformFromAstSync, File } from "@babel/core";
 import template from "@babel/template";
-import t from "@babel/types";
+import * as t from "@babel/types";
 import { fileURLToPath } from "url";
 
 import transformRuntime from "../lib/index.js";
 import corejs2Definitions from "./runtime-corejs2-definitions.js";
 import corejs3Definitions from "./runtime-corejs3-definitions.js";
+
+import presetEnv from "@babel/preset-env";
 
 const require = createRequire(import.meta.url);
 const runtimeVersion = require("@babel/runtime/package.json").version;
@@ -99,7 +101,10 @@ function writeCorejsExports(pkgDirname, runtimeRoot, paths) {
   const pkgJson = require(pkgJsonPath);
   const exports = pkgJson.exports;
   // Export `./core-js/` so `import "@babel/runtime-corejs3/core-js/some-feature.js"` works
+  // Node < 17
   exports[`./${runtimeRoot}/`] = `./${runtimeRoot}/`;
+  // Node >= 17
+  exports[`./${runtimeRoot}/*.js`] = `./${runtimeRoot}/*.js`;
   for (const corejsPath of paths) {
     // Export `./core-js/some-feature` so `import "@babel/runtime-corejs3/core-js/some-feature"` also works
     const corejsExportPath = `./${runtimeRoot}/${corejsPath}`;
@@ -153,11 +158,11 @@ function writeHelpers(runtimeName, { corejs } = {}) {
     // Node.js versions >=13.0.0, <13.7.0 support the `exports` field but
     // not conditional exports (`require`/`node`/`default`)
     // We can specify exports with an array of fallbacks:
-    // - Node.js >=13.7.0 and bundlers will succesfully load the first
+    // - Node.js >=13.7.0 and bundlers will successfully load the first
     //   array entry:
     //    * Node.js will always load the CJS file
     //    * Modern tools when using "import" will load the ESM file
-    //    * Everything else (old tools, or requrie() in tools) will
+    //    * Everything else (old tools, or require() in tools) will
     //      load the CJS file
     // - Node.js 13.2-13.7 will ignore the "node" and "import" conditions,
     //   will fallback to "default" and load the CJS file
@@ -186,6 +191,7 @@ function writeHelperExports(runtimeName, helperSubExports) {
     // These patterns are deprecated, but since patterns
     // containing * are not supported in every Node.js
     // version we keep them for better compatibility.
+    // For node < 17
     "./regenerator/": "./regenerator/",
   };
   const pkgDirname = getRuntimeRoot(runtimeName);
@@ -217,7 +223,7 @@ function buildHelper(
 
   if (!esm) {
     bindings = [];
-    helpers.ensure(helperName, babel.File);
+    helpers.ensure(helperName, File);
     for (const dep of helpers.getDependencies(helperName)) {
       const id = (dependencies[dep] = t.identifier(t.toIdentifier(dep)));
       tree.body.push(template.statement.ast`
@@ -235,39 +241,36 @@ function buildHelper(
   );
   tree.body.push(...helper.nodes);
 
-  return babel.transformFromAst(tree, null, {
+  return transformFromAstSync(tree, null, {
     filename: helperFilename,
-    presets: [
-      [
-        "@babel/preset-env",
-        { modules: false, exclude: ["@babel/plugin-transform-typeof-symbol"] },
-      ],
-    ],
+    presets: [[presetEnv, { modules: false }]],
     plugins: [
       [transformRuntime, { corejs, version: runtimeVersion }],
       buildRuntimeRewritePlugin(runtimeName, helperName),
       esm ? null : addDefaultCJSExport,
     ].filter(Boolean),
-    overrides: [
-      {
-        exclude: /typeof/,
-        plugins: ["@babel/plugin-transform-typeof-symbol"],
-      },
-    ],
   }).code;
 }
 
 function buildRuntimeRewritePlugin(runtimeName, helperName) {
   /**
-   * rewrite helpers imports to runtime imports
+   * Rewrite helper imports to load the adequate module format version
    * @example
    * adjustImportPath(ast`"setPrototypeOf"`)
-   * // returns ast`"@babel/runtime/helpers/esm/setPrototypeOf"`
-   * @param {*} node The string literal contains import path
+   * // returns ast`"./setPrototypeOf"`
+   * @example
+   * adjustImportPath(ast`"@babel/runtime/helpers/typeof"`)
+   * // returns ast`"./typeof"`
+   * @param {*} node The string literal that contains the import path
    */
   function adjustImportPath(node) {
-    if (helpers.list.includes(node.value)) {
-      node.value = `./${node.value}.js`;
+    const helpersPath = path.posix.join(runtimeName, "helpers");
+    const helper = node.value.startsWith(helpersPath)
+      ? path.basename(node.value)
+      : node.value;
+
+    if (helpers.list.includes(helper)) {
+      node.value = `./${helper}.js`;
     }
   }
 
@@ -302,14 +305,24 @@ function buildRuntimeRewritePlugin(runtimeName, helperName) {
 }
 
 function addDefaultCJSExport({ template }) {
+  const transformed = new WeakSet();
+
   return {
     visitor: {
       AssignmentExpression: {
         exit(path) {
           if (path.get("left").matchesPattern("module.exports")) {
-            path.insertAfter(template.expression.ast`
-              module.exports.default = module.exports,
-              module.exports.__esModule = true
+            if (transformed.has(path.node)) return;
+            transformed.add(path.node);
+
+            // Ensure that the completion value is still `module.exports`.
+            // This would be guaranteed by `insertAfter`, but by using `replaceWith`
+            // we can do it by putting `module.exports` last so that we don't need
+            // to inject temporary variables.
+            path.replaceWith(template.expression.ast`
+              ${path.node},
+              module.exports.__esModule = true,
+              module.exports.default = module.exports
             `);
           }
         },

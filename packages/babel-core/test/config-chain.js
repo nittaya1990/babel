@@ -2,17 +2,20 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import * as babel from "../lib";
-import getTargets from "@babel/helper-compilation-targets";
+import * as babel from "../lib/index.js";
+import rimraf from "rimraf";
+
+import _getTargets from "@babel/helper-compilation-targets";
+const getTargets = _getTargets.default || _getTargets;
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
-import { isMJS, loadOptionsAsync, skipUnsupportedESM } from "./helpers/esm";
+import { isMJS, loadOptionsAsync, skipUnsupportedESM } from "./helpers/esm.js";
 
 // TODO: In Babel 8, we can directly uses fs.promises which is supported by
 // node 8+
 const pfs =
-  fs.promises ??
+  fs.promises ||
   new Proxy(fs, {
     get(target, name) {
       if (name === "copyFile") {
@@ -66,13 +69,23 @@ function escapeRegExp(string) {
   return string.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 }
 
+const tempDirs = [];
+
 async function getTemp(name) {
-  const cwd = await pfs.mkdtemp(os.tmpdir() + path.sep + name);
+  const tempDir = os.tmpdir() + path.sep + name;
+  tempDirs.push(tempDir);
+  const cwd = await pfs.mkdtemp(tempDir);
   const tmp = name => path.join(cwd, name);
   const config = name =>
     pfs.copyFile(fixture("config-files-templates", name), tmp(name));
   return { cwd, tmp, config };
 }
+
+afterAll(() => {
+  for (const dir of tempDirs) {
+    rimraf.sync(dir);
+  }
+});
 
 describe("buildConfigChain", function () {
   describe("test", () => {
@@ -221,6 +234,96 @@ describe("buildConfigChain", function () {
         });
 
         expect(opts.comments).toBeUndefined();
+      });
+    });
+
+    describe("filename requirement", () => {
+      const BASE_OPTS = {
+        cwd: fixture("nonexistant-fake"),
+        babelrc: false,
+        configFile: false,
+      };
+
+      describe("in config", () => {
+        it("requires filename if string", () => {
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              test: fixture("nonexistant-fake"),
+            }),
+          ).toThrow(/no filename was passed/);
+        });
+
+        it("requires filename if RegExp", () => {
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              test: /file/,
+            }),
+          ).toThrow(/no filename was passed/);
+        });
+
+        it("does not require filename if function", () => {
+          const mock = jest.fn().mockReturnValue(true);
+
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              test: mock,
+            }),
+          ).not.toThrow();
+          expect(mock).toHaveBeenCalledWith(undefined, expect.anything());
+
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              filename: "some-filename",
+              test: mock,
+            }),
+          ).not.toThrow();
+          expect(mock.mock.calls[1][0].endsWith("some-filename")).toBe(true);
+        });
+      });
+
+      describe("in preset", () => {
+        it("requires filename if string", () => {
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              presets: [() => ({ test: fixture("nonexistant-fake") })],
+            }),
+          ).toThrow(/requires a filename/);
+        });
+
+        it("requires filename if RegExp", () => {
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              presets: [() => ({ test: /file/ })],
+            }),
+          ).toThrow(/requires a filename/);
+        });
+
+        it("does not require filename if function", () => {
+          const mock = jest.fn().mockReturnValue(true);
+
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              presets: [() => ({ test: mock })],
+            }),
+          ).not.toThrow();
+          expect(mock).toHaveBeenCalledWith(undefined, expect.anything());
+
+          expect(() =>
+            loadOptions({
+              ...BASE_OPTS,
+              filename: "some-filename",
+              presets: [() => ({ test: mock })],
+            }),
+          ).not.toThrow();
+          expect(mock.mock.calls[1][0].endsWith("some-filename")).toBe(true);
+        });
       });
     });
   });
@@ -1051,7 +1154,7 @@ describe("buildConfigChain", function () {
         "babel.config.mjs",
       ])("should load %s asynchronously", async name => {
         const esm = isMJS(name);
-        if (skipUnsupportedESM(esm, `should load ${name} asynchronously`)) {
+        if (esm && skipUnsupportedESM(`should load ${name} asynchronously`)) {
           return;
         }
 
@@ -1083,8 +1186,8 @@ describe("buildConfigChain", function () {
       )("should throw if both %s and %s are used", async (name1, name2) => {
         const esm = isMJS(name1) || isMJS(name2);
         if (
+          esm &&
           skipUnsupportedESM(
-            esm,
             `should throw if both ${name1} and ${name2} are used`,
           )
         ) {
@@ -1150,7 +1253,7 @@ describe("buildConfigChain", function () {
         ].filter(Boolean),
       )("should load %s asynchronously", async name => {
         const esm = isMJS(name);
-        if (skipUnsupportedESM(esm, `should load ${name} asynchronously`)) {
+        if (esm && skipUnsupportedESM(`should load ${name} asynchronously`)) {
           return;
         }
 
@@ -1192,8 +1295,8 @@ describe("buildConfigChain", function () {
       )("should throw if both %s and %s are used", async (name1, name2) => {
         const esm = isMJS(name1) || isMJS(name2);
         if (
+          esm &&
           skipUnsupportedESM(
-            esm,
             `should throw if both ${name1} and ${name2} are used`,
           )
         ) {
@@ -1236,7 +1339,8 @@ describe("buildConfigChain", function () {
         async ({ config, dir, error }) => {
           const esm = isMJS(config);
           if (
-            skipUnsupportedESM(esm, `should show helpful errors for ${config}`)
+            esm &&
+            skipUnsupportedESM(`should show helpful errors for ${config}`)
           ) {
             return;
           }
@@ -1340,6 +1444,20 @@ describe("buildConfigChain", function () {
           presets: ["./fixtures/config-loading/preset5"],
         });
       }).toThrow(/Preset \/\* your preset \*\/ requires a filename/);
+    });
+
+    it("should not throw error on $schema property in json config files", () => {
+      const filename = fixture(
+        "config-files",
+        "babel-config-json-$schema-property",
+        "babel.config.json",
+      );
+      expect(() => {
+        babel.loadPartialConfig({
+          filename,
+          cwd: path.dirname(filename),
+        });
+      }).not.toThrow();
     });
   });
 });

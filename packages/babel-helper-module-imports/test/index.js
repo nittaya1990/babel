@@ -2,7 +2,7 @@ import * as babel from "@babel/core";
 import { fileURLToPath } from "url";
 import path from "path";
 
-import { ImportInjector } from "../";
+import { ImportInjector } from "../lib/index.js";
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,7 +18,7 @@ function test(sourceType, opts, initializer, inputCode, expectedCode) {
     inputCode = "";
   }
 
-  const result = babel.transform(inputCode, {
+  const result = babel.transformSync(inputCode, {
     cwd,
     sourceType,
     filename: "example" + (sourceType === "module" ? ".mjs" : ".js"),

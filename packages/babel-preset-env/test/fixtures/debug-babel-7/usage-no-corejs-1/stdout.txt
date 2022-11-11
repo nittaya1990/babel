@@ -10,13 +10,14 @@ Using targets:
 Using modules transform: auto
 
 Using plugins:
+  proposal-class-static-block { chrome < 94, firefox < 93, ie }
   proposal-private-property-in-object { chrome < 91, firefox < 90, ie }
-  proposal-class-properties { chrome < 84, firefox < 90, ie }
+  proposal-class-properties { chrome < 74, firefox < 90, ie }
   proposal-private-methods { chrome < 84, firefox < 90, ie }
   proposal-numeric-separator { chrome < 75, firefox < 70, ie }
   proposal-logical-assignment-operators { chrome < 85, firefox < 79, ie }
   proposal-nullish-coalescing-operator { chrome < 80, firefox < 72, ie }
-  proposal-optional-chaining { chrome, firefox < 74, ie }
+  proposal-optional-chaining { chrome < 91, firefox < 74, ie }
   proposal-json-strings { chrome < 66, firefox < 62, ie }
   proposal-optional-catch-binding { chrome < 66, firefox < 58, ie }
   transform-parameters { firefox < 53, ie }
@@ -67,9 +68,9 @@ Using polyfills with `usage-global` method:
 [<CWD>/packages/babel-preset-env/test/fixtures/debug-babel-7/usage-no-corejs-1/input.js]
 The corejs2 polyfill added the following polyfills:
   es6.object.to-string { "chrome":"52", "firefox":"50", "ie":"11" }
-  es6.promise { "chrome":"52", "firefox":"50", "ie":"11" }
-  es6.map { "chrome":"52", "firefox":"50", "ie":"11" }
-  es6.string.iterator { "chrome":"52", "firefox":"50", "ie":"11" }
+  es6.promise { "ie":"11" }
+  es6.map { "firefox":"50", "ie":"11" }
+  es6.string.iterator { "ie":"11" }
   es6.array.iterator { "chrome":"52", "firefox":"50", "ie":"11" }
   web.dom.iterable { "chrome":"52", "firefox":"50", "ie":"11" }
 

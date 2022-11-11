@@ -1,19 +1,28 @@
-import { lt } from "semver";
-import type { SemVer } from "semver";
+import semver, { type SemVer } from "semver";
 import { logPlugin } from "./debug";
 import getOptionSpecificExcludesFor from "./get-option-specific-excludes";
-import { removeUnnecessaryItems, removeUnsupportedItems } from "./filter-items";
+import {
+  addProposalSyntaxPlugins,
+  removeUnnecessaryItems,
+  removeUnsupportedItems,
+} from "./filter-items";
 import moduleTransformations from "./module-transformations";
 import normalizeOptions from "./normalize-options";
-import { proposalPlugins, pluginSyntaxMap } from "../data/shipped-proposals";
+import {
+  pluginSyntaxMap,
+  proposalPlugins,
+  proposalSyntaxPlugins,
+} from "./shipped-proposals";
 import {
   plugins as pluginsList,
   pluginsBugfixes as pluginsBugfixesList,
+  overlappingPlugins,
 } from "./plugins-compat-data";
-import overlappingPlugins from "@babel/compat-data/overlapping-plugins";
 
 import removeRegeneratorEntryPlugin from "./polyfills/regenerator";
 import legacyBabelPolyfillPlugin from "./polyfills/babel-polyfill";
+
+import type { CallerMetadata } from "@babel/core";
 
 import _pluginCoreJS2 from "babel-plugin-polyfill-corejs2";
 import _pluginCoreJS3 from "babel-plugin-polyfill-corejs3";
@@ -29,11 +38,11 @@ import getTargets, {
 } from "@babel/helper-compilation-targets";
 import type { Targets, InputTargets } from "@babel/helper-compilation-targets";
 import availablePlugins from "./available-plugins";
-import { declare } from "@babel/helper-plugin-utils";
+import { declarePreset } from "@babel/helper-plugin-utils";
 
 type ModuleTransformationsType =
   typeof import("./module-transformations").default;
-import type { BuiltInsOption, ModuleOption } from "./types";
+import type { BuiltInsOption, ModuleOption, Options } from "./types";
 
 // TODO: Remove in Babel 8
 export function isPluginRequired(targets: Targets, support: Targets) {
@@ -48,6 +57,7 @@ function filterStageFromList(
 ) {
   return Object.keys(list).reduce((result, item) => {
     if (!stageList.has(item)) {
+      // @ts-expect-error todo: refine result types
       result[item] = list[item];
     }
 
@@ -80,7 +90,9 @@ function getPluginList(proposals: boolean, bugfixes: boolean) {
 }
 
 const getPlugin = (pluginName: string) => {
-  const plugin = availablePlugins[pluginName]();
+  const plugin =
+    // @ts-expect-error plugin name is constructed from available plugin list
+    availablePlugins[pluginName]();
 
   if (!plugin) {
     throw new Error(
@@ -134,7 +146,7 @@ export const getModulesPluginNames = ({
       shouldTransformESM &&
       modules !== "umd"
     ) {
-      modulesPluginNames.push("proposal-dynamic-import");
+      modulesPluginNames.push("transform-dynamic-import");
     } else {
       if (shouldTransformDynamicImport) {
         console.warn(
@@ -149,7 +161,7 @@ export const getModulesPluginNames = ({
   }
 
   if (shouldTransformExportNamespaceFrom) {
-    modulesPluginNames.push("proposal-export-namespace-from");
+    modulesPluginNames.push("transform-export-namespace-from");
   } else {
     modulesPluginNames.push("syntax-export-namespace-from");
   }
@@ -236,10 +248,10 @@ export const getPolyfillPlugins = ({
 };
 
 function getLocalTargets(
-  optionsTargets,
-  ignoreBrowserslistConfig,
-  configPath,
-  browserslistEnv,
+  optionsTargets: Options["targets"],
+  ignoreBrowserslistConfig: boolean,
+  configPath: string,
+  browserslistEnv: string,
 ) {
   if (optionsTargets?.esmodules && optionsTargets.browsers) {
     console.warn(`
@@ -255,23 +267,27 @@ function getLocalTargets(
   });
 }
 
-function supportsStaticESM(caller) {
+function supportsStaticESM(caller: CallerMetadata | undefined) {
+  // @ts-expect-error supportsStaticESM is not defined in CallerMetadata
   return !!caller?.supportsStaticESM;
 }
 
-function supportsDynamicImport(caller) {
+function supportsDynamicImport(caller: CallerMetadata | undefined) {
+  // @ts-expect-error supportsDynamicImport is not defined in CallerMetadata
   return !!caller?.supportsDynamicImport;
 }
 
-function supportsExportNamespaceFrom(caller) {
+function supportsExportNamespaceFrom(caller: CallerMetadata | undefined) {
+  // @ts-expect-error supportsExportNamespaceFrom is not defined in CallerMetadata
   return !!caller?.supportsExportNamespaceFrom;
 }
 
-function supportsTopLevelAwait(caller) {
+function supportsTopLevelAwait(caller: CallerMetadata | undefined) {
+  // @ts-expect-error supportsTopLevelAwait is not defined in CallerMetadata
   return !!caller?.supportsTopLevelAwait;
 }
 
-export default declare((api, opts) => {
+export default declarePreset((api, opts: Options) => {
   api.assertVersion(7);
 
   const babelTargets = api.targets();
@@ -300,7 +316,7 @@ export default declare((api, opts) => {
     // @babel/core < 7.13.0 doesn't load targets (api.targets() always
     // returns {} thanks to @babel/helper-plugin-utils), so we always want
     // to fallback to the old targets behavior in this case.
-    lt(api.version, "7.13.0") ||
+    semver.lt(api.version, "7.13.0") ||
     // If any browserslist-related option is specified, fallback to the old
     // behavior of not using the targets specified in the top-level options.
     opts.targets ||
@@ -336,7 +352,7 @@ option \`forceAllTransforms: true\` instead.
       ? forceAllTransforms
       : forceAllTransforms || hasUglifyTarget
   )
-    ? {}
+    ? ({} as Targets)
     : targets;
 
   const include = transformIncludesAndExcludes(optionsInclude);
@@ -346,7 +362,7 @@ option \`forceAllTransforms: true\` instead.
   const shouldSkipExportNamespaceFrom =
     (modules === "auto" && api.caller?.(supportsExportNamespaceFrom)) ||
     (modules === false &&
-      !isRequired("proposal-export-namespace-from", transformTargets, {
+      !isRequired("transform-export-namespace-from", transformTargets, {
         compatData,
         includes: include.plugins,
         excludes: exclude.plugins,
@@ -360,7 +376,8 @@ option \`forceAllTransforms: true\` instead.
     shouldTransformDynamicImport:
       modules !== "auto" || !api.caller?.(supportsDynamicImport),
     shouldTransformExportNamespaceFrom: !shouldSkipExportNamespaceFrom,
-    shouldParseTopLevelAwait: !api.caller || api.caller(supportsTopLevelAwait),
+    shouldParseTopLevelAwait:
+      !api.caller || (api.caller(supportsTopLevelAwait) as boolean),
   });
 
   const pluginNames = filterItems(
@@ -374,6 +391,9 @@ option \`forceAllTransforms: true\` instead.
   );
   removeUnnecessaryItems(pluginNames, overlappingPlugins);
   removeUnsupportedItems(pluginNames, api.version);
+  if (shippedProposals) {
+    addProposalSyntaxPlugins(pluginNames, proposalSyntaxPlugins);
+  }
 
   const polyfillPlugins = getPolyfillPlugins({
     useBuiltIns,
@@ -391,9 +411,9 @@ option \`forceAllTransforms: true\` instead.
   const plugins = Array.from(pluginNames)
     .map(pluginName => {
       if (
-        pluginName === "proposal-class-properties" ||
-        pluginName === "proposal-private-methods" ||
-        pluginName === "proposal-private-property-in-object"
+        pluginName === "transform-class-properties" ||
+        pluginName === "transform-private-methods" ||
+        pluginName === "transform-private-property-in-object"
       ) {
         return [
           getPlugin(pluginName),

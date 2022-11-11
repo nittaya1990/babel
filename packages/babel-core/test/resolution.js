@@ -1,4 +1,4 @@
-import * as babel from "../lib/index";
+import * as babel from "../lib/index.js";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -22,7 +22,7 @@ describe("addon resolution", function () {
   it("should find module: presets", function () {
     process.chdir("module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["module:preset"],
@@ -32,7 +32,7 @@ describe("addon resolution", function () {
   it("should find module: plugins", function () {
     process.chdir("module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["module:plugin"],
@@ -42,7 +42,7 @@ describe("addon resolution", function () {
   it("should find standard presets", function () {
     process.chdir("standard-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["mod"],
@@ -52,7 +52,7 @@ describe("addon resolution", function () {
   it("should find standard plugins", function () {
     process.chdir("standard-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["mod"],
@@ -62,7 +62,7 @@ describe("addon resolution", function () {
   it("should find standard presets with an existing prefix", function () {
     process.chdir("standard-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["babel-preset-mod"],
@@ -72,7 +72,7 @@ describe("addon resolution", function () {
   it("should find standard plugins with an existing prefix", function () {
     process.chdir("standard-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["babel-plugin-mod"],
@@ -82,7 +82,7 @@ describe("addon resolution", function () {
   it("should find @babel scoped presets", function () {
     process.chdir("babel-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@babel/foo"],
@@ -92,7 +92,7 @@ describe("addon resolution", function () {
   it("should find @babel scoped plugins", function () {
     process.chdir("babel-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@babel/foo"],
@@ -102,7 +102,7 @@ describe("addon resolution", function () {
   it("should find @babel scoped presets with an existing prefix", function () {
     process.chdir("babel-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@babel/preset-foo"],
@@ -112,7 +112,7 @@ describe("addon resolution", function () {
   it("should find @babel scoped plugins", function () {
     process.chdir("babel-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@babel/plugin-foo"],
@@ -122,7 +122,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped presets", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/mod"],
@@ -132,7 +132,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped plugins", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/mod"],
@@ -142,7 +142,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped presets with an inner babel-preset", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/thing.babel-preset-convert"],
@@ -152,7 +152,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped plugins with an inner babel-plugin", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/thing.babel-plugin-convert"],
@@ -162,7 +162,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped presets with an babel-preset suffix", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/thing-babel-preset"],
@@ -172,7 +172,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped plugins with an babel-plugin suffix", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/thing-babel-plugin"],
@@ -182,7 +182,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped presets with an existing prefix", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/babel-preset-mod"],
@@ -192,7 +192,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped plugins with an existing prefix", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/babel-plugin-mod"],
@@ -202,7 +202,7 @@ describe("addon resolution", function () {
   it("should find @foo/babel-plugin when specified", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/babel-plugin"],
@@ -212,7 +212,7 @@ describe("addon resolution", function () {
   it("should find @foo/babel-preset when specified", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/babel-preset"],
@@ -222,7 +222,7 @@ describe("addon resolution", function () {
   it("should find @foo/babel-plugin/index when specified", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/babel-plugin/index"],
@@ -232,7 +232,7 @@ describe("addon resolution", function () {
   it("should find @foo/babel-preset/index when specified", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/babel-preset/index"],
@@ -242,7 +242,7 @@ describe("addon resolution", function () {
   it("should find @foo/babel-plugin when just scope given", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo"],
@@ -252,7 +252,7 @@ describe("addon resolution", function () {
   it("should find @foo/babel-preset when just scope given", function () {
     process.chdir("foo-org-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo"],
@@ -262,7 +262,7 @@ describe("addon resolution", function () {
   it("should find relative path presets", function () {
     process.chdir("relative-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["./dir/preset.js"],
@@ -272,7 +272,7 @@ describe("addon resolution", function () {
   it("should find relative path plugins", function () {
     process.chdir("relative-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["./dir/plugin.js"],
@@ -282,7 +282,7 @@ describe("addon resolution", function () {
   it("should find module file presets", function () {
     process.chdir("nested-module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["mod/preset"],
@@ -292,7 +292,7 @@ describe("addon resolution", function () {
   it("should find module file plugins", function () {
     process.chdir("nested-module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["mod/plugin"],
@@ -302,7 +302,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped module file presets", function () {
     process.chdir("scoped-nested-module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@foo/mod/preset"],
@@ -312,7 +312,7 @@ describe("addon resolution", function () {
   it("should find @foo scoped module file plugins", function () {
     process.chdir("scoped-nested-module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@foo/mod/plugin"],
@@ -322,7 +322,7 @@ describe("addon resolution", function () {
   it("should find @babel scoped module file presets", function () {
     process.chdir("babel-scoped-nested-module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       presets: ["@babel/mod/preset"],
@@ -332,7 +332,7 @@ describe("addon resolution", function () {
   it("should find @babel scoped module file plugins", function () {
     process.chdir("babel-scoped-nested-module-paths");
 
-    babel.transform("", {
+    babel.transformSync("", {
       filename: "filename.js",
       babelrc: false,
       plugins: ["@babel/mod/plugin"],
@@ -344,7 +344,7 @@ describe("addon resolution", function () {
     process.chdir("throw-module-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         presets: ["foo"],
@@ -354,9 +354,9 @@ describe("addon resolution", function () {
       // because Jest 24 has an issue on setting the MODULE_NOT_FOUND error when the native
       // `require.resolve` is provided.
       // see https://github.com/babel/babel/pull/12439/files#r535996000
-      process.versions.node.startsWith("8.")
-        ? /Cannot resolve module 'babel-preset-foo'/
-        : /Cannot resolve module 'babel-preset-foo'.*\n- If you want to resolve "foo", use "module:foo"/,
+      parseInt(process.versions.node, 10) <= 10
+        ? /Cannot (?:find|resolve) module 'babel-preset-foo'/
+        : /Cannot (?:find|resolve) module 'babel-preset-foo'.*\n- If you want to resolve "foo", use "module:foo"/s,
     );
   });
 
@@ -364,15 +364,15 @@ describe("addon resolution", function () {
     process.chdir("throw-module-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         plugins: ["foo"],
       });
     }).toThrow(
-      process.versions.node.startsWith("8.")
-        ? /Cannot resolve module 'babel-plugin-foo'/
-        : /Cannot resolve module 'babel-plugin-foo'.*\n- If you want to resolve "foo", use "module:foo"/,
+      parseInt(process.versions.node, 10) <= 10
+        ? /Cannot (?:find|resolve) module 'babel-plugin-foo'/
+        : /Cannot (?:find|resolve) module 'babel-plugin-foo'.*\n- If you want to resolve "foo", use "module:foo"/s,
     );
   });
 
@@ -380,15 +380,15 @@ describe("addon resolution", function () {
     process.chdir("throw-babel-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         presets: ["foo"],
       });
     }).toThrow(
-      process.versions.node.startsWith("8.")
-        ? /Cannot resolve module 'babel-preset-foo'/
-        : /Cannot resolve module 'babel-preset-foo'.*\n- Did you mean "@babel\/foo"\?/,
+      parseInt(process.versions.node, 10) <= 10
+        ? /Cannot (?:find|resolve) module 'babel-preset-foo'/
+        : /Cannot (?:find|resolve) module 'babel-preset-foo'.*\n- Did you mean "@babel\/foo"\?/s,
     );
   });
 
@@ -396,15 +396,15 @@ describe("addon resolution", function () {
     process.chdir("throw-babel-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         plugins: ["foo"],
       });
     }).toThrow(
-      process.versions.node.startsWith("8.")
-        ? /Cannot resolve module 'babel-plugin-foo'/
-        : /Cannot resolve module 'babel-plugin-foo'.*\n- Did you mean "@babel\/foo"\?/,
+      parseInt(process.versions.node, 10) <= 10
+        ? /Cannot (?:find|resolve) module 'babel-plugin-foo'/
+        : /Cannot (?:find|resolve) module 'babel-plugin-foo'.*\n- Did you mean "@babel\/foo"\?/s,
     );
   });
 
@@ -412,15 +412,15 @@ describe("addon resolution", function () {
     process.chdir("throw-opposite-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         presets: ["testplugin"],
       });
     }).toThrow(
-      process.versions.node.startsWith("8.")
-        ? /Cannot resolve module 'babel-preset-testplugin'/
-        : /Cannot resolve module 'babel-preset-testplugin'.*\n- Did you accidentally pass a plugin as a preset\?/,
+      parseInt(process.versions.node, 10) <= 10
+        ? /Cannot (?:find|resolve) module 'babel-preset-testplugin'/
+        : /Cannot (?:find|resolve) module 'babel-preset-testplugin'.*\n- Did you accidentally pass a plugin as a preset\?/s,
     );
   });
 
@@ -428,15 +428,15 @@ describe("addon resolution", function () {
     process.chdir("throw-opposite-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         plugins: ["testpreset"],
       });
     }).toThrow(
-      process.versions.node.startsWith("8.")
-        ? /Cannot resolve module 'babel-plugin-testpreset'/
-        : /Cannot resolve module 'babel-plugin-testpreset'.*\n- Did you accidentally pass a preset as a plugin\?/,
+      parseInt(process.versions.node, 10) <= 10
+        ? /Cannot (?:find|resolve) module 'babel-plugin-testpreset'/
+        : /Cannot (?:find|resolve) module 'babel-plugin-testpreset'.*\n- Did you accidentally pass a preset as a plugin\?/s,
     );
   });
 
@@ -444,23 +444,49 @@ describe("addon resolution", function () {
     process.chdir("throw-missing-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         presets: ["foo"],
       });
-    }).toThrow(/Cannot resolve module 'babel-preset-foo'/);
+    }).toThrow(/Cannot (?:find|resolve) module 'babel-preset-foo'/);
   });
 
   it("should throw about missing plugins", function () {
     process.chdir("throw-missing-paths");
 
     expect(() => {
-      babel.transform("", {
+      babel.transformSync("", {
         filename: "filename.js",
         babelrc: false,
         plugins: ["foo"],
       });
-    }).toThrow(/Cannot resolve module 'babel-plugin-foo'/);
+    }).toThrow(/Cannot (?:find|resolve) module 'babel-plugin-foo'/);
+  });
+
+  const nodeGte12 = parseInt(process.versions.node, 10) >= 12 ? it : it.skip;
+
+  nodeGte12("should respect package.json#exports", async function () {
+    process.chdir("pkg-exports");
+
+    expect(
+      babel.transformSync("", {
+        filename: "filename.js",
+        babelrc: false,
+        configFile: false,
+        plugins: ["babel-plugin-dual"],
+      }).code,
+    ).toBe(`"CJS"`);
+
+    expect(
+      (
+        await babel.transformAsync("", {
+          filename: "filename.js",
+          babelrc: false,
+          configFile: false,
+          plugins: ["babel-plugin-dual"],
+        })
+      ).code,
+    ).toBe(`"ESM"`);
   });
 });

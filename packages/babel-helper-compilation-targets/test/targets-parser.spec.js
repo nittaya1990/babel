@@ -1,7 +1,9 @@
 import browserslist from "browserslist";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import getTargets from "..";
+
+import _getTargets from "../lib/index.js";
+const getTargets = _getTargets.default || _getTargets;
 
 describe("getTargets", () => {
   it("parses", () => {
@@ -290,6 +292,31 @@ describe("getTargets", () => {
         );
       },
     );
+
+    (process.env.BABEL_8_BREAKING ? it.skip : it)(
+      "'browsers' option will have no effect if it is an empty array - Babel 7",
+      () => {
+        expect(getTargets({ esmodules: "intersect", browsers: [] })).toEqual(
+          getTargets({ esmodules: "intersect" }),
+        );
+      },
+    );
+
+    it("The final 'browsers' handled variable will have no effect if it is an empty array", () => {
+      expect(getTargets({ esmodules: "intersect", browsers: [] })).toEqual(
+        getTargets(
+          { esmodules: "intersect" },
+          { ignoreBrowserslistConfig: true },
+        ),
+      );
+    });
+
+    it("'resolveTargets' will be called rightly if 'browsers' is an array with some value", () => {
+      // 'test' is an unknown browser query, so methods of 'browserslist' library will throw an error
+      expect(() =>
+        getTargets({ esmodules: "intersect", browsers: ["test"] }),
+      ).toThrow();
+    });
 
     (process.env.BABEL_8_BREAKING ? it : it.skip)(
       "'intersect' behaves like no-op if no browsers are specified",

@@ -1,16 +1,16 @@
 import * as babelPlugins from "./generated/plugins";
 
 export default (_: any, { loose = false } = {}) => {
-  const plugins = [
+  // todo(flow->ts) improve types
+  const plugins: any[] = [
     babelPlugins.syntaxImportAssertions,
-    babelPlugins.proposalClassStaticBlock,
+    babelPlugins.proposalUnicodeSetsRegex,
+    babelPlugins.proposalDuplicateNamedCapturingGroupsRegex,
   ];
 
   if (!process.env.BABEL_8_BREAKING) {
     // These are Stage 4
     plugins.push(
-      babelPlugins.syntaxImportMeta,
-      babelPlugins.syntaxTopLevelAwait,
       babelPlugins.proposalExportNamespaceFrom,
       babelPlugins.proposalLogicalAssignmentOperators,
       [babelPlugins.proposalOptionalChaining, { loose }],
@@ -20,6 +20,7 @@ export default (_: any, { loose = false } = {}) => {
       babelPlugins.proposalNumericSeparator,
       [babelPlugins.proposalPrivateMethods, { loose }],
       babelPlugins.proposalPrivatePropertyInObject,
+      babelPlugins.proposalClassStaticBlock,
     );
   }
 

@@ -1,8 +1,10 @@
-import traverse, { NodePath } from "../lib";
 import { parse } from "@babel/parser";
 import * as t from "@babel/types";
 
-function getPath(code, options): NodePath<t.Program> {
+import _traverse, { NodePath } from "../lib/index.js";
+const traverse = _traverse.default || _traverse;
+
+function getPath(code, options) {
   const ast =
     typeof code === "string" ? parse(code, options) : createNode(code);
   let path;
@@ -254,6 +256,40 @@ describe("scope", () => {
       });
     });
 
+    describe("decorator", () => {
+      const parserOptions = {
+        plugins: [["decorators", { decoratorsBeforeExport: true }]],
+      };
+      it("should not have visibility of declarations inside method body", () => {
+        expect(
+          getPath(
+            `var a = "outside"; class foo { @(() => () => a) m() { let a = "inside"; } }`,
+            parserOptions,
+          )
+            .get("body.1.body.body.0.decorators.0.expression.body.body")
+            .scope.getBinding("a").path.node.init.value,
+        ).toBe("outside");
+      });
+      it("should not have visibility on parameter bindings", () => {
+        expect(
+          getPath(
+            `var a = "outside"; class foo { @(() => () => a) m(a = "inside") {} }`,
+            parserOptions,
+          )
+            .get("body.1.body.body.0.decorators.0.expression.body.body")
+            .scope.getBinding("a").path.node.init.value,
+        ).toBe("outside");
+      });
+    });
+
+    it("switch discriminant scope", () => {
+      expect(
+        getPath(`let a = "outside"; switch (a) { default: let a = "inside" }`)
+          .get("body.1.discriminant")
+          .scope.getBinding("a").path.node.init.value,
+      ).toBe("outside");
+    });
+
     it("variable declaration", function () {
       expect(getPath("var foo = null;").scope.getBinding("foo").path.type).toBe(
         "VariableDeclarator",
@@ -363,37 +399,42 @@ describe("scope", () => {
       ).toBe(false);
     });
 
-    it("purity", function () {
-      expect(
-        getPath("({ x: 1, foo() { return 1 } })")
-          .get("body")[0]
-          .get("expression")
-          .isPure(),
-      ).toBeTruthy();
-      expect(
-        getPath("class X { get foo() { return 1 } }")
-          .get("body")[0]
-          .get("expression")
-          .isPure(),
-      ).toBeFalsy();
-      expect(
-        getPath("`${a}`").get("body")[0].get("expression").isPure(),
-      ).toBeFalsy();
-      expect(
-        getPath("let a = 1; `${a}`").get("body")[1].get("expression").isPure(),
-      ).toBeTruthy();
-      expect(
-        getPath("let a = 1; `${a++}`")
-          .get("body")[1]
-          .get("expression")
-          .isPure(),
-      ).toBeFalsy();
-      expect(
-        getPath("tagged`foo`").get("body")[0].get("expression").isPure(),
-      ).toBeFalsy();
-      expect(
-        getPath("String.raw`foo`").get("body")[0].get("expression").isPure(),
-      ).toBeTruthy();
+    it("variable constantness in loops", () => {
+      let scopePath = null;
+      const isAConstant = code => {
+        let path = getPath(code);
+        if (scopePath) path = path.get(scopePath);
+        return path.scope.getBinding("a").constant;
+      };
+
+      expect(isAConstant("for (_ of ns) { var a = 1; }")).toBe(false);
+      expect(isAConstant("for (_ in ns) { var a = 1; }")).toBe(false);
+      expect(isAConstant("for (;;) { var a = 1; }")).toBe(false);
+      expect(isAConstant("while (1) { var a = 1; }")).toBe(false);
+      expect(isAConstant("do { var a = 1; } while (1)")).toBe(false);
+
+      expect(isAConstant("for (var a of ns) {}")).toBe(false);
+      expect(isAConstant("for (var a in ns) {}")).toBe(false);
+      expect(isAConstant("for (var a;;) {}")).toBe(true);
+
+      scopePath = "body.0.body.expression";
+      expect(isAConstant("for (_ of ns) () => { var a = 1; }")).toBe(true);
+      expect(isAConstant("for (_ in ns) () => { var a = 1; }")).toBe(true);
+      expect(isAConstant("for (;;) () => { var a = 1; }")).toBe(true);
+      expect(isAConstant("while (1) () => { var a = 1; }")).toBe(true);
+      expect(isAConstant("do () => { var a = 1; }; while (1)")).toBe(true);
+
+      scopePath = "body.0.body";
+      expect(isAConstant("for (_ of ns) { let a = 1; }")).toBe(true);
+      expect(isAConstant("for (_ in ns) { let a = 1; }")).toBe(true);
+      expect(isAConstant("for (;;) { let a = 1; }")).toBe(true);
+      expect(isAConstant("while (1) { let a = 1; }")).toBe(true);
+      expect(isAConstant("do { let a = 1; } while (1)")).toBe(true);
+
+      scopePath = "body.0";
+      expect(isAConstant("for (let a of ns) {}")).toBe(true);
+      expect(isAConstant("for (let a in ns) {}")).toBe(true);
+      expect(isAConstant("for (let a;;) {}")).toBe(true);
     });
 
     test("label", function () {
@@ -432,17 +473,56 @@ describe("scope", () => {
       ).toBe("_foo3");
     });
 
-    it("reference paths", function () {
-      const path = getIdentifierPath("function square(n) { return n * n}");
-      const referencePaths = path.context.scope.bindings.n.referencePaths;
-      expect(referencePaths).toHaveLength(2);
-      expect(referencePaths[0].node.loc.start).toEqual({
-        line: 1,
-        column: 28,
+    describe("reference paths", () => {
+      it("param referenced in function body", function () {
+        const path = getIdentifierPath("function square(n) { return n * n}");
+        const referencePaths = path.context.scope.bindings.n.referencePaths;
+        expect(referencePaths).toHaveLength(2);
+        expect(referencePaths[0].node.loc.start).toEqual({
+          line: 1,
+          column: 28,
+          index: 28,
+        });
+        expect(referencePaths[1].node.loc.start).toEqual({
+          line: 1,
+          column: 32,
+          index: 32,
+        });
       });
-      expect(referencePaths[1].node.loc.start).toEqual({
-        line: 1,
-        column: 32,
+      it("id referenced in function body", () => {
+        const path = getIdentifierPath("(function n(m) { return n })");
+        const { referencePaths, identifier } = path.scope.getOwnBinding("n");
+        expect(identifier.start).toMatchInlineSnapshot(`10`);
+        expect(referencePaths).toHaveLength(1);
+        expect(referencePaths[0].node.start).toMatchInlineSnapshot(`24`);
+      });
+      it("id referenced in param initializer - function expression", () => {
+        const path = getIdentifierPath("(function n(m = n) {})");
+        const { referencePaths, identifier } = path.scope.getOwnBinding("n");
+        expect(identifier.start).toMatchInlineSnapshot(`10`);
+        expect(referencePaths).toHaveLength(1);
+        expect(referencePaths[0].node.start).toMatchInlineSnapshot(`16`);
+      });
+      it("id referenced in param initializer - function declaration", () => {
+        const path = getIdentifierPath("function n(m = n) {}");
+        const { referencePaths, identifier } = path.scope.getBinding("n");
+        expect(identifier.start).toMatchInlineSnapshot(`9`);
+        expect(referencePaths).toHaveLength(1);
+        expect(referencePaths[0].node.start).toMatchInlineSnapshot(`15`);
+      });
+      it("param referenced in function body with id collision", () => {
+        const path = getIdentifierPath("(function n(n) { return n })");
+        const { referencePaths, identifier } = path.scope.getOwnBinding("n");
+        expect(identifier.start).toMatchInlineSnapshot(`12`);
+        expect(referencePaths).toHaveLength(1);
+        expect(referencePaths[0].node.start).toMatchInlineSnapshot(`24`);
+      });
+      it("param referenced in param initializer with id collision", () => {
+        const path = getIdentifierPath("(function n(n, m = n) {})");
+        const { referencePaths, identifier } = path.scope.getOwnBinding("n");
+        expect(identifier.start).toMatchInlineSnapshot(`12`);
+        expect(referencePaths).toHaveLength(1);
+        expect(referencePaths[0].node.start).toMatchInlineSnapshot(`19`);
       });
     });
 
@@ -501,7 +581,7 @@ describe("scope", () => {
       path.scope.crawl();
       path.scope.crawl();
 
-      expect(path.scope.references._jsx).toBeTruthy();
+      expect(path.scope.references._jsx).toBe(true);
     });
 
     test("generateUid collision check after re-crawling", function () {
@@ -590,6 +670,12 @@ describe("scope", () => {
         expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
       });
 
+      it("using", () => {
+        const ast = createTryCatch("using");
+
+        expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
+      });
+
       it("var", () => {
         const ast = createTryCatch("var");
 
@@ -613,6 +699,18 @@ describe("scope", () => {
         ];
 
         expect(() => getPath(ast)).not.toThrow();
+      });
+    });
+
+    describe("duplicate declaration", () => {
+      it("should not throw error on duplicate class and function declaration", () => {
+        const ast = [
+          t.classDeclaration(t.identifier("A"), null, t.classBody([]), []),
+          t.functionDeclaration(t.identifier("A"), [], t.blockStatement([])),
+        ];
+
+        ast[0].declare = true;
+        expect(() => getPath(ast)).not.toThrowError();
       });
     });
 
@@ -700,6 +798,208 @@ describe("scope", () => {
           }
         }
       }
+    });
+  });
+
+  describe("own bindings", () => {
+    // Var declarations should be declared in the nearest FunctionParent ancestry
+    describe("var declarations should be registered", () => {
+      it("in program", () => {
+        const program = getPath("var foo;");
+        expect(program.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in function declaration", () => {
+        const functionDeclaration = getPath("function f() { var foo; }").get(
+          "body.0",
+        );
+        expect(functionDeclaration.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in function expression", () => {
+        const functionExpression = getPath("(function () { var foo; })").get(
+          "body.0.expression",
+        );
+        expect(functionExpression.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in arrow expression", () => {
+        const arrowExpression =
+          getPath("() => { var foo; }").get("body.0.expression");
+        expect(arrowExpression.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in object method", () => {
+        const objectMethod = getPath("({ method() { var foo; } })").get(
+          "body.0.expression.properties.0",
+        );
+        expect(objectMethod.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in class method", () => {
+        const classMethod = getPath("(class { method() { var foo; } })").get(
+          "body.0.expression.body.body.0",
+        );
+        expect(classMethod.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in class private method", () => {
+        const classMethod = getPath("(class { #method() { var foo; } })").get(
+          "body.0.expression.body.body.0",
+        );
+        expect(classMethod.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in static block", () => {
+        const staticBlock = getPath("(class { static { var foo; } })", {
+          plugins: ["classStaticBlock"],
+        }).get("body.0.expression.body.body.0");
+        expect(staticBlock.scope.hasOwnBinding("foo")).toBe(true);
+      });
+    });
+    describe("var declarations should not be registered", () => {
+      it("in block statement", () => {
+        const blockStatement = getPath("{ var foo; }").get("body.0");
+        expect(blockStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in catch clause", () => {
+        const catchClause = getPath("try {} catch { var foo; }").get(
+          "body.0.handler",
+        );
+        expect(catchClause.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in for-init statement", () => {
+        const forStatement = getPath("for (var foo;;);").get("body.0");
+        expect(forStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in for-in statement", () => {
+        const forStatement = getPath("for (var foo in x);").get("body.0");
+        expect(forStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in for-of statement", () => {
+        const forStatement = getPath("for (var foo of x);").get("body.0");
+        expect(forStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in switch statement", () => {
+        const switchStatement = getPath("switch (0) { case 0: var foo; }").get(
+          "body.0",
+        );
+        expect(switchStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in while statement", () => {
+        const whileStatement = getPath("while (0) \n var foo;").get("body.0");
+        expect(whileStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+      it("in do-while statement", () => {
+        const doWhileStatement = getPath("do \n var foo \n while(0);").get(
+          "body.0",
+        );
+        expect(doWhileStatement.scope.hasOwnBinding("foo")).toBe(false);
+      });
+    });
+    // Lexical declarations should be registered in the nearest BlockParent ancestry
+    describe("let declarations should be registered", () => {
+      it("in program", () => {
+        const program = getPath("let foo;");
+        expect(program.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in function declaration", () => {
+        const functionDeclaration = getPath("function f() { let foo; }").get(
+          "body.0",
+        );
+        expect(functionDeclaration.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in function expression", () => {
+        const functionExpression = getPath("(function () { let foo; })").get(
+          "body.0.expression",
+        );
+        expect(functionExpression.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in arrow expression", () => {
+        const arrowExpression =
+          getPath("() => { let foo; }").get("body.0.expression");
+        expect(arrowExpression.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in object method", () => {
+        const objectMethod = getPath("({ method() { let foo; } })").get(
+          "body.0.expression.properties.0",
+        );
+        expect(objectMethod.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in class method", () => {
+        const classMethod = getPath("(class { method() { let foo; } })").get(
+          "body.0.expression.body.body.0",
+        );
+        expect(classMethod.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in class private method", () => {
+        const classMethod = getPath("(class { #method() { let foo; } })").get(
+          "body.0.expression.body.body.0",
+        );
+        expect(classMethod.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in static block", () => {
+        const staticBlock = getPath("(class { static { let foo; } })", {
+          plugins: ["classStaticBlock"],
+        }).get("body.0.expression.body.body.0");
+        expect(staticBlock.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in block statement", () => {
+        const blockStatement = getPath("{ let foo; }").get("body.0");
+        expect(blockStatement.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in catch clause", () => {
+        const catchClause = getPath("try {} catch { let foo; }").get(
+          "body.0.handler",
+        );
+        expect(catchClause.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in for-init statement", () => {
+        const forStatement = getPath("for (let foo;;);").get("body.0");
+        expect(forStatement.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in for-in statement", () => {
+        const forStatement = getPath("for (let foo in x);").get("body.0");
+        expect(forStatement.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in for-of statement", () => {
+        const forStatement = getPath("for (let foo of x);").get("body.0");
+        expect(forStatement.scope.hasOwnBinding("foo")).toBe(true);
+      });
+      it("in switch statement", () => {
+        const switchStatement = getPath("switch (0) { case 0: let foo; }").get(
+          "body.0",
+        );
+        expect(switchStatement.scope.hasOwnBinding("foo")).toBe(true);
+      });
+    });
+  });
+
+  describe(".push", () => {
+    it("registers the new binding in the correct scope", () => {
+      const program = getPath("class A {}");
+      const classDeclaration = program.get("body.0");
+      classDeclaration.scope.push({ id: t.identifier("class") });
+      expect(program.toString()).toMatchInlineSnapshot(`
+        "var class;
+        class A {}"
+      `);
+      expect(program.scope.hasOwnBinding("class")).toBe(true);
+    });
+    it("registers the new binding outside function when the path is a param initializer", () => {
+      const program = getPath("(a = f()) => {}");
+      const assignmentPattern = program.get("body.0.expression.params.0");
+      assignmentPattern.scope.push({ id: t.identifier("ref") });
+      expect(program.toString()).toMatchInlineSnapshot(`
+        "var ref;
+        (a = f()) => {};"
+      `);
+      expect(program.scope.hasOwnBinding("ref")).toBe(true);
+    });
+    it("registers the new binding outside class method when the path is a param initializer", () => {
+      const program = getPath("class C { m(a = f()) {} }");
+      const assignmentPattern = program.get("body.0.body.body.0.params.0");
+      assignmentPattern.scope.push({ id: t.identifier("ref") });
+      expect(program.toString()).toMatchInlineSnapshot(`
+        "var ref;
+        class C {
+          m(a = f()) {}
+        }"
+      `);
+      expect(program.scope.hasOwnBinding("ref")).toBe(true);
     });
   });
 });

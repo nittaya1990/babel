@@ -13,10 +13,12 @@ import loadCjsOrMjsDefault from "./module-types";
 import pathPatternToRegex from "../pattern-to-regex";
 import type { FilePackageData, RelativeConfig, ConfigFile } from "./types";
 import type { CallerMetadata } from "../validation/options";
+import ConfigError from "../../errors/config-error";
 
 import * as fs from "../../gensync-utils/fs";
 
 import { createRequire } from "module";
+import { endHiddenCallStack } from "../../errors/rewrite-stack-trace";
 const require = createRequire(import.meta.url);
 
 const debug = buildDebug("babel:config:loading:files:configuration");
@@ -36,6 +38,158 @@ const RELATIVE_CONFIG_FILENAMES = [
 ];
 
 const BABELIGNORE_FILENAME = ".babelignore";
+
+const LOADING_CONFIGS = new Set();
+
+const readConfigJS = makeStrongCache(function* readConfigJS(
+  filepath: string,
+  cache: CacheConfigurator<{
+    envName: string;
+    caller: CallerMetadata | undefined;
+  }>,
+): Handler<ConfigFile | null> {
+  if (!nodeFs.existsSync(filepath)) {
+    cache.never();
+    return null;
+  }
+
+  // The `require()` call below can make this code reentrant if a require hook like @babel/register has been
+  // loaded into the system. That would cause Babel to attempt to compile the `.babelrc.js` file as it loads
+  // below. To cover this case, we auto-ignore re-entrant config processing.
+  if (LOADING_CONFIGS.has(filepath)) {
+    cache.never();
+
+    debug("Auto-ignoring usage of config %o.", filepath);
+    return {
+      filepath,
+      dirname: path.dirname(filepath),
+      options: {},
+    };
+  }
+
+  let options: unknown;
+  try {
+    LOADING_CONFIGS.add(filepath);
+    options = yield* loadCjsOrMjsDefault(
+      filepath,
+      "You appear to be using a native ECMAScript module configuration " +
+        "file, which is only supported when running Babel asynchronously.",
+    );
+  } finally {
+    LOADING_CONFIGS.delete(filepath);
+  }
+
+  let assertCache = false;
+  if (typeof options === "function") {
+    // @ts-expect-error - if we want to make it possible to use async configs
+    yield* [];
+
+    options = endHiddenCallStack(options as any as (api: ConfigAPI) => {})(
+      makeConfigAPI(cache),
+    );
+
+    assertCache = true;
+  }
+
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new ConfigError(
+      `Configuration should be an exported JavaScript object.`,
+      filepath,
+    );
+  }
+
+  // @ts-expect-error todo(flow->ts)
+  if (typeof options.then === "function") {
+    throw new ConfigError(
+      `You appear to be using an async configuration, ` +
+        `which your current version of Babel does not support. ` +
+        `We may add support for this in the future, ` +
+        `but if you're on the most recent version of @babel/core and still ` +
+        `seeing this error, then you'll need to synchronously return your config.`,
+      filepath,
+    );
+  }
+
+  if (assertCache && !cache.configured()) throwConfigError(filepath);
+
+  return {
+    filepath,
+    dirname: path.dirname(filepath),
+    options,
+  };
+});
+
+const packageToBabelConfig = makeWeakCacheSync(
+  (file: ConfigFile): ConfigFile | null => {
+    const babel: unknown = file.options["babel"];
+
+    if (typeof babel === "undefined") return null;
+
+    if (typeof babel !== "object" || Array.isArray(babel) || babel === null) {
+      throw new ConfigError(`.babel property must be an object`, file.filepath);
+    }
+
+    return {
+      filepath: file.filepath,
+      dirname: file.dirname,
+      options: babel,
+    };
+  },
+);
+
+const readConfigJSON5 = makeStaticFileCache((filepath, content): ConfigFile => {
+  let options;
+  try {
+    options = json5.parse(content);
+  } catch (err) {
+    throw new ConfigError(
+      `Error while parsing config - ${err.message}`,
+      filepath,
+    );
+  }
+
+  if (!options) throw new ConfigError(`No config detected`, filepath);
+
+  if (typeof options !== "object") {
+    throw new ConfigError(`Config returned typeof ${typeof options}`, filepath);
+  }
+  if (Array.isArray(options)) {
+    throw new ConfigError(`Expected config object but found array`, filepath);
+  }
+
+  delete options["$schema"];
+
+  return {
+    filepath,
+    dirname: path.dirname(filepath),
+    options,
+  };
+});
+
+const readIgnoreConfig = makeStaticFileCache((filepath, content) => {
+  const ignoreDir = path.dirname(filepath);
+  const ignorePatterns = content
+    .split("\n")
+    .map<string>(line => line.replace(/#(.*?)$/, "").trim())
+    .filter(line => !!line);
+
+  for (const pattern of ignorePatterns) {
+    if (pattern[0] === "!") {
+      throw new ConfigError(
+        `Negation of file paths is not supported.`,
+        filepath,
+      );
+    }
+  }
+
+  return {
+    filepath,
+    dirname: path.dirname(filepath),
+    ignore: ignorePatterns.map(pattern =>
+      pathPatternToRegex(pattern, ignoreDir),
+    ),
+  };
+});
 
 export function findConfigUpwards(rootDir: string): string | null {
   let dirname = rootDir;
@@ -57,7 +211,7 @@ export function findConfigUpwards(rootDir: string): string | null {
 export function* findRelativeConfig(
   packageData: FilePackageData,
   envName: string,
-  caller: CallerMetadata | void,
+  caller: CallerMetadata | undefined,
 ): Handler<RelativeConfig> {
   let config = null;
   let ignore = null;
@@ -93,7 +247,7 @@ export function* findRelativeConfig(
 export function findRootConfig(
   dirname: string,
   envName: string,
-  caller: CallerMetadata | void,
+  caller: CallerMetadata | undefined,
 ): Handler<ConfigFile | null> {
   return loadOneConfig(ROOT_CONFIG_FILENAMES, dirname, envName, caller);
 }
@@ -102,7 +256,7 @@ function* loadOneConfig(
   names: string[],
   dirname: string,
   envName: string,
-  caller: CallerMetadata | void,
+  caller: CallerMetadata | undefined,
   previousConfig: ConfigFile | null = null,
 ): Handler<ConfigFile | null> {
   const configs = yield* gensync.all(
@@ -112,7 +266,7 @@ function* loadOneConfig(
   );
   const config = configs.reduce((previousConfig: ConfigFile | null, config) => {
     if (config && previousConfig) {
-      throw new Error(
+      throw new ConfigError(
         `Multiple configuration files found. Please remove one:\n` +
           ` - ${path.basename(previousConfig.filepath)}\n` +
           ` - ${config.filepath}\n` +
@@ -133,13 +287,16 @@ export function* loadConfig(
   name: string,
   dirname: string,
   envName: string,
-  caller: CallerMetadata | void,
+  caller: CallerMetadata | undefined,
 ): Handler<ConfigFile> {
   const filepath = require.resolve(name, { paths: [dirname] });
 
   const conf = yield* readConfig(filepath, envName, caller);
   if (!conf) {
-    throw new Error(`Config file ${filepath} contains no configuration data`);
+    throw new ConfigError(
+      `Config file contains no configuration data`,
+      filepath,
+    );
   }
 
   debug("Loaded config %o from %o.", name, dirname);
@@ -150,156 +307,16 @@ export function* loadConfig(
  * Read the given config file, returning the result. Returns null if no config was found, but will
  * throw if there are parsing errors while loading a config.
  */
-function readConfig(filepath, envName, caller): Handler<ConfigFile | null> {
+function readConfig(
+  filepath: string,
+  envName: string,
+  caller: CallerMetadata | undefined,
+): Handler<ConfigFile | null> {
   const ext = path.extname(filepath);
   return ext === ".js" || ext === ".cjs" || ext === ".mjs"
     ? readConfigJS(filepath, { envName, caller })
     : readConfigJSON5(filepath);
 }
-
-const LOADING_CONFIGS = new Set();
-
-const readConfigJS = makeStrongCache(function* readConfigJS(
-  filepath: string,
-  cache: CacheConfigurator<{
-    envName: string;
-    caller: CallerMetadata | void;
-  }>,
-): Handler<ConfigFile | null> {
-  if (!nodeFs.existsSync(filepath)) {
-    cache.never();
-    return null;
-  }
-
-  // The `require()` call below can make this code reentrant if a require hook like @babel/register has been
-  // loaded into the system. That would cause Babel to attempt to compile the `.babelrc.js` file as it loads
-  // below. To cover this case, we auto-ignore re-entrant config processing.
-  if (LOADING_CONFIGS.has(filepath)) {
-    cache.never();
-
-    debug("Auto-ignoring usage of config %o.", filepath);
-    return {
-      filepath,
-      dirname: path.dirname(filepath),
-      options: {},
-    };
-  }
-
-  let options: unknown;
-  try {
-    LOADING_CONFIGS.add(filepath);
-    options = yield* loadCjsOrMjsDefault(
-      filepath,
-      "You appear to be using a native ECMAScript module configuration " +
-        "file, which is only supported when running Babel asynchronously.",
-    );
-  } catch (err) {
-    err.message = `${filepath}: Error while loading config - ${err.message}`;
-    throw err;
-  } finally {
-    LOADING_CONFIGS.delete(filepath);
-  }
-
-  let assertCache = false;
-  if (typeof options === "function") {
-    // @ts-expect-error - if we want to make it possible to use async configs
-    yield* [];
-
-    options = (options as any as (api: ConfigAPI) => {})(makeConfigAPI(cache));
-
-    assertCache = true;
-  }
-
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new Error(
-      `${filepath}: Configuration should be an exported JavaScript object.`,
-    );
-  }
-
-  // @ts-expect-error todo(flow->ts)
-  if (typeof options.then === "function") {
-    throw new Error(
-      `You appear to be using an async configuration, ` +
-        `which your current version of Babel does not support. ` +
-        `We may add support for this in the future, ` +
-        `but if you're on the most recent version of @babel/core and still ` +
-        `seeing this error, then you'll need to synchronously return your config.`,
-    );
-  }
-
-  if (assertCache && !cache.configured()) throwConfigError();
-
-  return {
-    filepath,
-    dirname: path.dirname(filepath),
-    options,
-  };
-});
-
-const packageToBabelConfig = makeWeakCacheSync(
-  (file: ConfigFile): ConfigFile | null => {
-    const babel: unknown = file.options["babel"];
-
-    if (typeof babel === "undefined") return null;
-
-    if (typeof babel !== "object" || Array.isArray(babel) || babel === null) {
-      throw new Error(`${file.filepath}: .babel property must be an object`);
-    }
-
-    return {
-      filepath: file.filepath,
-      dirname: file.dirname,
-      options: babel,
-    };
-  },
-);
-
-const readConfigJSON5 = makeStaticFileCache((filepath, content): ConfigFile => {
-  let options;
-  try {
-    options = json5.parse(content);
-  } catch (err) {
-    err.message = `${filepath}: Error while parsing config - ${err.message}`;
-    throw err;
-  }
-
-  if (!options) throw new Error(`${filepath}: No config detected`);
-
-  if (typeof options !== "object") {
-    throw new Error(`${filepath}: Config returned typeof ${typeof options}`);
-  }
-  if (Array.isArray(options)) {
-    throw new Error(`${filepath}: Expected config object but found array`);
-  }
-
-  return {
-    filepath,
-    dirname: path.dirname(filepath),
-    options,
-  };
-});
-
-const readIgnoreConfig = makeStaticFileCache((filepath, content) => {
-  const ignoreDir = path.dirname(filepath);
-  const ignorePatterns = content
-    .split("\n")
-    .map<string>(line => line.replace(/#(.*?)$/, "").trim())
-    .filter(line => !!line);
-
-  for (const pattern of ignorePatterns) {
-    if (pattern[0] === "!") {
-      throw new Error(`Negation of file paths is not supported.`);
-    }
-  }
-
-  return {
-    filepath,
-    dirname: path.dirname(filepath),
-    ignore: ignorePatterns.map(pattern =>
-      pathPatternToRegex(pattern, ignoreDir),
-    ),
-  };
-});
 
 export function* resolveShowConfigPath(
   dirname: string,
@@ -318,8 +335,9 @@ export function* resolveShowConfigPath(
   return null;
 }
 
-function throwConfigError(): never {
-  throw new Error(`\
+function throwConfigError(filepath: string): never {
+  throw new ConfigError(
+    `\
 Caching was left unconfigured. Babel's plugins, presets, and .babelrc.js files can be configured
 for various types of caching, using the first param of their handler functions:
 
@@ -352,5 +370,7 @@ module.exports = function(api) {
 
   // Return the value that will be cached.
   return { };
-};`);
+};`,
+    filepath,
+  );
 }

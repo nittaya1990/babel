@@ -2,9 +2,7 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
-    "lib": [
-      "esnext"
-    ],
+    "lib": ["esnext"],
     "declaration": true,
     "declarationMap": true,
     "emitDeclarationOnly": true,
@@ -12,7 +10,11 @@
     "moduleResolution": "node",
     "esModuleInterop": true,
     "isolatedModules": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true
+    "skipLibCheck": false,
+    "resolveJsonModule": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "incremental": true
   }
 }

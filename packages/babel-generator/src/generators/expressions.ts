@@ -27,7 +27,7 @@ export function UnaryExpression(this: Printer, node: t.UnaryExpression) {
 
 export function DoExpression(this: Printer, node: t.DoExpression) {
   if (node.async) {
-    this.word("async");
+    this.word("async", true);
     this.space();
   }
   this.word("do");
@@ -49,9 +49,7 @@ export function UpdateExpression(this: Printer, node: t.UpdateExpression) {
     this.token(node.operator);
     this.print(node.argument, node);
   } else {
-    this.startTerminatorless(true);
-    this.print(node.argument, node);
-    this.endTerminatorless();
+    this.printTerminatorless(node.argument, node, true);
     this.token(node.operator);
   }
 }
@@ -74,7 +72,7 @@ export function ConditionalExpression(
 export function NewExpression(
   this: Printer,
   node: t.NewExpression,
-  parent: any,
+  parent: t.Node,
 ) {
   this.word("new");
   this.space();
@@ -94,6 +92,7 @@ export function NewExpression(
   this.print(node.typeParameters, node); // TS
 
   if (node.optional) {
+    // TODO: This can never happen
     this.token("?.");
   }
   this.token("(");
@@ -113,9 +112,44 @@ export function Super(this: Printer) {
   this.word("super");
 }
 
+function isDecoratorMemberExpression(
+  node: t.Expression | t.Super | t.V8IntrinsicIdentifier,
+): boolean {
+  switch (node.type) {
+    case "Identifier":
+      return true;
+    case "MemberExpression":
+      return (
+        !node.computed &&
+        node.property.type === "Identifier" &&
+        isDecoratorMemberExpression(node.object)
+      );
+    default:
+      return false;
+  }
+}
+function shouldParenthesizeDecoratorExpression(
+  node: t.Expression | t.Super | t.V8IntrinsicIdentifier,
+) {
+  if (node.type === "ParenthesizedExpression") {
+    // We didn't check extra?.parenthesized here because we don't track decorators in needsParen
+    return false;
+  }
+  return !isDecoratorMemberExpression(
+    node.type === "CallExpression" ? node.callee : node,
+  );
+}
+
 export function Decorator(this: Printer, node: t.Decorator) {
   this.token("@");
-  this.print(node.expression, node);
+  const { expression } = node;
+  if (shouldParenthesizeDecoratorExpression(expression)) {
+    this.token("(");
+    this.print(expression, node);
+    this.token(")");
+  } else {
+    this.print(expression, node);
+  }
   this.newline();
 }
 
@@ -156,12 +190,14 @@ export function OptionalCallExpression(
 ) {
   this.print(node.callee, node);
 
-  this.print(node.typeArguments, node); // Flow
   this.print(node.typeParameters, node); // TS
 
   if (node.optional) {
     this.token("?.");
   }
+
+  this.print(node.typeArguments, node); // Flow
+
   this.token("(");
   this.printList(node.arguments, node);
   this.token(")");
@@ -181,25 +217,32 @@ export function Import(this: Printer) {
   this.word("import");
 }
 
-function buildYieldAwait(keyword: string) {
-  return function (node: any) {
-    this.word(keyword);
+export function AwaitExpression(this: Printer, node: t.AwaitExpression) {
+  this.word("await");
 
-    if (node.delegate) {
-      this.token("*");
-    }
-
-    if (node.argument) {
-      this.space();
-      const terminatorState = this.startTerminatorless();
-      this.print(node.argument, node);
-      this.endTerminatorless(terminatorState);
-    }
-  };
+  if (node.argument) {
+    this.space();
+    this.printTerminatorless(node.argument, node, false);
+  }
 }
 
-export const YieldExpression = buildYieldAwait("yield");
-export const AwaitExpression = buildYieldAwait("await");
+export function YieldExpression(this: Printer, node: t.YieldExpression) {
+  this.word("yield", true);
+
+  if (node.delegate) {
+    this.token("*");
+    if (node.argument) {
+      this.space();
+      // line terminators are allowed after yield*
+      this.print(node.argument, node);
+    }
+  } else {
+    if (node.argument) {
+      this.space();
+      this.printTerminatorless(node.argument, node, false);
+    }
+  }
+}
 
 export function EmptyStatement(this: Printer) {
   this.semicolon(true /* force */);
@@ -228,7 +271,7 @@ export function AssignmentPattern(this: Printer, node: t.AssignmentPattern) {
 export function AssignmentExpression(
   this: Printer,
   node: t.AssignmentExpression,
-  parent: any,
+  parent: t.Node,
 ) {
   // Somewhere inside a for statement `init` node but doesn't usually
   // needs a paren except for `in` expressions: `for (a in b ? a : b;;)`
@@ -311,15 +354,17 @@ export function V8IntrinsicIdentifier(
   this.word(node.name);
 }
 
-export function ModuleExpression(node: t.ModuleExpression) {
-  this.word("module");
+export function ModuleExpression(this: Printer, node: t.ModuleExpression) {
+  this.word("module", true);
   this.space();
   this.token("{");
-  if (node.body.body.length === 0) {
-    this.token("}");
-  } else {
+  this.indent();
+  const { body } = node;
+  if (body.body.length || body.directives.length) {
     this.newline();
-    this.printSequence(node.body.body, node, { indent: true });
-    this.rightBrace();
   }
+  this.print(body, node);
+  this.dedent();
+  this.sourceWithOffset("end", node.loc, 0, -1);
+  this.rightBrace();
 }

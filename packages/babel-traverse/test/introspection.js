@@ -1,5 +1,7 @@
-import traverse from "../lib";
 import { parse } from "@babel/parser";
+
+import _traverse from "../lib/index.js";
+const traverse = _traverse.default || _traverse;
 
 function getPath(code, options = { sourceType: "script" }) {
   const ast = parse(code, options);
@@ -158,6 +160,14 @@ describe("path/introspection", function () {
       });
       const reference = program.get("body.1.expression");
       expect(reference.referencesImport("source", "😅")).toBe(true);
+    });
+    it("accepts a named import via a namespace import jsx member expression", function () {
+      const program = getPath(`import * as ns from "source"; <ns.dep />;`, {
+        sourceType: "module",
+        plugins: ["jsx"],
+      });
+      const reference = program.get("body.1.expression.openingElement.name");
+      expect(reference.referencesImport("source", "dep")).toBe(true);
     });
     it("rejects a named import from the wrong module", function () {
       const program = getPath(`import { dep } from "wrong-source"; dep;`, {

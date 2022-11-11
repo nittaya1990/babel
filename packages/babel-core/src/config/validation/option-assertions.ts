@@ -20,6 +20,7 @@ import type {
   CallerMetadata,
   RootMode,
   TargetsListOrObject,
+  AssumptionName,
 } from "./options";
 
 import { assumptionsNames } from "./options";
@@ -32,7 +33,7 @@ export type ValidatorSet = {
 
 export type Validator<T> = (loc: OptionPath, value: unknown) => T;
 
-export function msg(loc: NestingPath | GeneralPath) {
+export function msg(loc: NestingPath | GeneralPath): string {
   switch (loc.type) {
     case "root":
       return ``;
@@ -45,7 +46,7 @@ export function msg(loc: NestingPath | GeneralPath) {
     case "access":
       return `${msg(loc.parent)}[${JSON.stringify(loc.name)}]`;
     default:
-      // @ts-ignore should not happen when code is type checked
+      // @ts-expect-error should not happen when code is type checked
       throw new Error(`Assertion failure: Unknown type ${loc.type}`);
   }
 }
@@ -134,7 +135,7 @@ export function assertSourceType(
 export function assertCallerMetadata(
   loc: OptionPath,
   value: unknown,
-): CallerMetadata | void {
+): CallerMetadata | undefined {
   const obj = assertObject(loc, value);
   if (obj) {
     if (typeof obj.name !== "string") {
@@ -255,7 +256,7 @@ function assertIgnoreItem(loc: GeneralPath, value: unknown): IgnoreItem {
       )} must be an array of string/Function/RegExp values, or undefined`,
     );
   }
-  return value;
+  return value as IgnoreItem;
 }
 
 export function assertConfigApplicableTest(
@@ -277,7 +278,7 @@ export function assertConfigApplicableTest(
       `${msg(loc)} must be a string/Function/RegExp, or an array of those`,
     );
   }
-  return value;
+  return value as ConfigApplicableTest;
 }
 
 function checkValidTest(value: unknown): value is string | Function | RegExp {
@@ -326,7 +327,7 @@ export function assertBabelrcSearch(
         `or an array of those, got ${JSON.stringify(value as any)}`,
     );
   }
-  return value;
+  return value as BabelrcSearch;
 }
 
 export function assertPluginList(
@@ -445,7 +446,7 @@ function assertBrowserVersion(loc: GeneralPath, value: unknown) {
 
 export function assertAssumptions(
   loc: GeneralPath,
-  value: unknown,
+  value: { [key: string]: unknown },
 ): { [name: string]: boolean } | void {
   if (value === undefined) return;
 
@@ -462,7 +463,7 @@ export function assertAssumptions(
 
   for (const name of Object.keys(value)) {
     const subLoc = access(loc, name);
-    if (!assumptionsNames.has(name)) {
+    if (!assumptionsNames.has(name as AssumptionName)) {
       throw new Error(`${msg(subLoc)} is not a supported assumption.`);
     }
     if (typeof value[name] !== "boolean") {

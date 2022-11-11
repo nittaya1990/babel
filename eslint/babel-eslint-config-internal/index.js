@@ -3,10 +3,13 @@
 module.exports = {
   parser: "@babel/eslint-parser/experimental-worker",
   extends: "eslint:recommended",
-  plugins: ["flowtype"],
   parserOptions: {
-    ecmaVersion: 2020,
     sourceType: "module",
+    requireConfigFile: false,
+    babelOptions: {
+      babelrc: false,
+      configFile: false,
+    },
   },
   globals: {
     // Flow
@@ -15,7 +18,7 @@ module.exports = {
   },
   env: {
     node: true,
-    es2020: true,
+    es2022: true,
     browser: true,
   },
   rules: {
@@ -27,7 +30,5 @@ module.exports = {
     "no-process-exit": "error",
     "no-var": "error",
     "prefer-const": "error",
-    "flowtype/define-flow-type": "warn",
-    "flowtype/use-flow-type": "warn",
   },
 };

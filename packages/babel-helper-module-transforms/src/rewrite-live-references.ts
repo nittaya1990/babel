@@ -27,12 +27,12 @@ import type { ModuleMetadata } from "./normalize-and-load-metadata";
 interface RewriteReferencesVisitorState {
   exported: Map<any, any>;
   metadata: ModuleMetadata;
-  requeueInParent: (path) => void;
+  requeueInParent: (path: NodePath) => void;
   scope: Scope;
   imported: Map<any, any>;
   buildImportReference: (
-    [source, importName, localName]: readonly [any, any, any],
-    identNode,
+    [source, importName, localName]: readonly [string, string, string],
+    identNode: t.Identifier | t.CallExpression | t.JSXIdentifier,
   ) => any;
   seen: WeakSet<object>;
 }
@@ -40,11 +40,11 @@ interface RewriteReferencesVisitorState {
 interface RewriteBindingInitVisitorState {
   exported: Map<any, any>;
   metadata: ModuleMetadata;
-  requeueInParent: (path) => void;
+  requeueInParent: (path: NodePath) => void;
   scope: Scope;
 }
 
-function isInType(path) {
+function isInType(path: NodePath) {
   do {
     switch (path.parent.type) {
       case "TSTypeAnnotation":
@@ -54,7 +54,13 @@ function isInType(path) {
       case "TypeAlias":
         return true;
       case "ExportSpecifier":
-        return path.parentPath.parent.exportKind === "type";
+        return (
+          (
+            path.parentPath.parent as
+              | t.ExportDefaultDeclaration
+              | t.ExportNamedDeclaration
+          ).exportKind === "type"
+        );
       default:
         if (path.parentPath.isStatement() || path.parentPath.isExpression()) {
           return false;
@@ -69,7 +75,7 @@ export default function rewriteLiveReferences(
 ) {
   const imported = new Map();
   const exported = new Map();
-  const requeueInParent = path => {
+  const requeueInParent = (path: NodePath) => {
     // Manually re-queue `exports.default =` expressions so that the ES3
     // transform has an opportunity to convert them. Ideally this would
     // happen automatically from the replaceWith above. See #4140 for
@@ -104,6 +110,7 @@ export default function rewriteLiveReferences(
     exported, // local name => exported name list
   };
   programPath.traverse(
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
     rewriteBindingInitVisitor,
     rewriteBindingInitVisitorState,
   );
@@ -112,6 +119,7 @@ export default function rewriteLiveReferences(
     programPath,
     // NOTE(logan): The 'Array.from' calls are to make this code with in loose mode.
     new Set([...Array.from(imported.keys()), ...Array.from(exported.keys())]),
+    false,
   );
 
   // Rewrite reads/writes from imports and exports to have the correct behavior.
@@ -126,7 +134,13 @@ export default function rewriteLiveReferences(
       const meta = metadata.source.get(source);
 
       if (localName) {
-        if (meta.lazy) identNode = callExpression(identNode, []);
+        if (meta.lazy) {
+          identNode = callExpression(
+            // @ts-expect-error Fixme: we should handle the case when identNode is a JSXIdentifier
+            identNode,
+            [],
+          );
+        }
         return identNode;
       }
 
@@ -146,6 +160,7 @@ export default function rewriteLiveReferences(
       );
     },
   };
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   programPath.traverse(rewriteReferencesVisitor, rewriteReferencesVisitorState);
 }
 
@@ -166,10 +181,12 @@ const rewriteBindingInitVisitor: Visitor<RewriteBindingInitVisitorState> = {
     const exportNames = exported.get(localName) || [];
     if (exportNames.length > 0) {
       const statement = expressionStatement(
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define
         buildBindingExportAssignmentExpression(
           metadata,
           exportNames,
           identifier(localName),
+          path.scope,
         ),
       );
       // @ts-expect-error todo(flow->ts): avoid mutations
@@ -186,10 +203,12 @@ const rewriteBindingInitVisitor: Visitor<RewriteBindingInitVisitorState> = {
 
       if (exportNames.length > 0) {
         const statement = expressionStatement(
+          // eslint-disable-next-line @typescript-eslint/no-use-before-define
           buildBindingExportAssignmentExpression(
             metadata,
             exportNames,
             identifier(localName),
+            path.scope,
           ),
         );
         // @ts-expect-error todo(flow->ts): avoid mutations
@@ -202,10 +221,21 @@ const rewriteBindingInitVisitor: Visitor<RewriteBindingInitVisitorState> = {
 };
 
 const buildBindingExportAssignmentExpression = (
-  metadata,
-  exportNames,
-  localExpr,
+  metadata: ModuleMetadata,
+  exportNames: string[],
+  localExpr: t.Expression,
+  scope: Scope,
 ) => {
+  const exportsObjectName = metadata.exportName;
+  for (
+    let currentScope = scope;
+    currentScope != null;
+    currentScope = currentScope.parent
+  ) {
+    if (currentScope.hasOwnBinding(exportsObjectName)) {
+      currentScope.rename(exportsObjectName);
+    }
+  }
   return (exportNames || []).reduce((expr, exportName) => {
     // class Foo {} export { Foo, Foo as Bar };
     // as
@@ -215,7 +245,7 @@ const buildBindingExportAssignmentExpression = (
     return assignmentExpression(
       "=",
       memberExpression(
-        identifier(metadata.exportName),
+        identifier(exportsObjectName),
         computed ? stringLiteral(exportName) : identifier(exportName),
         /* computed */ computed,
       ),
@@ -224,7 +254,7 @@ const buildBindingExportAssignmentExpression = (
   }, localExpr);
 };
 
-const buildImportThrow = localName => {
+const buildImportThrow = (localName: string) => {
   return template.expression.ast`
     (function() {
       throw new Error('"' + '${localName}' + '" is read-only.');
@@ -290,6 +320,83 @@ const rewriteReferencesVisitor: Visitor<RewriteReferencesVisitorState> = {
     }
   },
 
+  UpdateExpression(path) {
+    const {
+      scope,
+      seen,
+      imported,
+      exported,
+      requeueInParent,
+      buildImportReference,
+    } = this;
+
+    if (seen.has(path.node)) return;
+
+    seen.add(path.node);
+
+    const arg = path.get("argument");
+
+    // No change needed
+    if (arg.isMemberExpression()) return;
+
+    const update = path.node;
+
+    if (arg.isIdentifier()) {
+      const localName = arg.node.name;
+
+      // redeclared in this scope
+      if (scope.getBinding(localName) !== path.scope.getBinding(localName)) {
+        return;
+      }
+
+      const exportedNames = exported.get(localName);
+      const importData = imported.get(localName);
+
+      if (exportedNames?.length > 0 || importData) {
+        if (importData) {
+          path.replaceWith(
+            assignmentExpression(
+              update.operator[0] + "=",
+              buildImportReference(importData, arg.node),
+              buildImportThrow(localName),
+            ),
+          );
+        } else if (update.prefix) {
+          // ++foo
+          // =>   exports.foo = ++foo
+          path.replaceWith(
+            buildBindingExportAssignmentExpression(
+              this.metadata,
+              exportedNames,
+              cloneNode(update),
+              path.scope,
+            ),
+          );
+        } else {
+          // foo++
+          // =>   (ref = i++, exports.i = i, ref)
+          const ref = scope.generateDeclaredUidIdentifier(localName);
+
+          path.replaceWith(
+            sequenceExpression([
+              assignmentExpression("=", cloneNode(ref), cloneNode(update)),
+              buildBindingExportAssignmentExpression(
+                this.metadata,
+                exportedNames,
+                identifier(localName),
+                path.scope,
+              ),
+              cloneNode(ref),
+            ]),
+          );
+        }
+      }
+    }
+
+    requeueInParent(path);
+    path.skip();
+  },
+
   AssignmentExpression: {
     exit(path) {
       const {
@@ -327,7 +434,7 @@ const rewriteReferencesVisitor: Visitor<RewriteReferencesVisitorState> = {
           const assignment = path.node;
 
           if (importData) {
-            assignment.left = buildImportReference(importData, assignment.left);
+            assignment.left = buildImportReference(importData, left.node);
 
             assignment.right = sequenceExpression([
               assignment.right,
@@ -340,6 +447,7 @@ const rewriteReferencesVisitor: Visitor<RewriteReferencesVisitorState> = {
               this.metadata,
               exportedNames,
               assignment,
+              path.scope,
             ),
           );
           requeueInParent(path);
@@ -361,7 +469,7 @@ const rewriteReferencesVisitor: Visitor<RewriteReferencesVisitorState> = {
 
         // Complex ({a, b, c} = {}); export { a, c };
         // =>   ({a, b, c} = {}), (exports.a = a, exports.c = c);
-        const items = [];
+        const items: t.Expression[] = [];
         programScopeIds.forEach(localName => {
           const exportedNames = exported.get(localName) || [];
           if (exportedNames.length > 0) {
@@ -370,6 +478,7 @@ const rewriteReferencesVisitor: Visitor<RewriteReferencesVisitorState> = {
                 this.metadata,
                 exportedNames,
                 identifier(localName),
+                path.scope,
               ),
             );
           }

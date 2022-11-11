@@ -18,6 +18,7 @@ const es2015Parameter = {
       "rest parameters",
       "destructuring, parameters / aliased defaults, arrow function",
       "destructuring, parameters / shorthand defaults, arrow function",
+      "destructuring, parameters / duplicate identifier",
     ],
   },
 };
@@ -127,46 +128,47 @@ const es2017 = {
 };
 
 const es2018 = {
-  "proposal-async-generator-functions": "Asynchronous Iterators",
-  "proposal-object-rest-spread": "object rest/spread properties",
+  "transform-async-generator-functions": "Asynchronous Iterators",
+  "transform-object-rest-spread": "object rest/spread properties",
 
   "transform-dotall-regex": "s (dotAll) flag for regular expressions",
-  "proposal-unicode-property-regex": "RegExp Unicode Property Escapes",
+  "transform-unicode-property-regex": "RegExp Unicode Property Escapes",
   "transform-named-capturing-groups-regex": "RegExp named capture groups",
 };
 
 const es2019 = {
-  "proposal-json-strings": "JSON superset",
-  "proposal-optional-catch-binding": "optional catch binding",
+  "transform-json-strings": "JSON superset",
+  "transform-optional-catch-binding": "optional catch binding",
 };
 
 const es2020 = {
-  "proposal-nullish-coalescing-operator": "nullish coalescing operator (??)",
-  "proposal-optional-chaining": "optional chaining operator (?.)",
+  "transform-nullish-coalescing-operator": "nullish coalescing operator (??)",
+  "transform-optional-chaining": "optional chaining operator (?.)",
 };
 
 const es2021 = {
-  "proposal-numeric-separator": "numeric separator",
-  "proposal-logical-assignment-operators": "Logical Assignment",
+  "transform-numeric-separator": "numeric separators",
+  "transform-logical-assignment-operators": "Logical Assignment",
 };
 
 const es2022 = {
-  "proposal-private-property-in-object":
+  "transform-class-static-block": "Class static initialization blocks",
+  "transform-private-property-in-object":
     "Ergonomic brand checks for private fields",
-  "proposal-class-properties": {
+  "transform-class-properties": {
     features: [
-      "static class fields",
-      "instance class fields, public instance class fields",
-      "instance class fields, private instance class fields basic support",
-      "instance class fields, computed instance class fields",
+      "static class fields / public static class fields",
+      "static class fields / private static class fields",
+      "static class fields / computed static class fields",
+      "instance class fields / public instance class fields",
+      "instance class fields / private instance class fields basic support",
+      "instance class fields / computed instance class fields",
     ],
   },
-  "proposal-private-methods": "private class methods",
+  "transform-private-methods": "private class methods",
 };
 
-const shippedProposal = {
-  "proposal-class-static-block": "Class static initialization blocks",
-};
+const shippedProposal = {};
 
 // Run plugins for modern features first
 module.exports = Object.assign(

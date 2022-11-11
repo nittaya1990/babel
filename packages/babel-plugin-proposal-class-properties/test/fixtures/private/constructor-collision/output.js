@@ -1,8 +1,6 @@
 var foo = "bar";
-
 var _bar = /*#__PURE__*/new WeakMap();
-
-var Foo = function Foo() {
+var Foo = /*#__PURE__*/babelHelpers.createClass(function Foo() {
   "use strict";
 
   babelHelpers.classCallCheck(this, Foo);
@@ -11,4 +9,4 @@ var Foo = function Foo() {
     value: foo
   });
   var _foo = "foo";
-};
+});

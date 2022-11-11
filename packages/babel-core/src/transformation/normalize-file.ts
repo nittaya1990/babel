@@ -12,17 +12,26 @@ import parser from "../parser";
 import cloneDeep from "./util/clone-deep";
 
 const debug = buildDebug("babel:transform:file");
-const LARGE_INPUT_SOURCEMAP_THRESHOLD = 1_000_000;
+const LARGE_INPUT_SOURCEMAP_THRESHOLD = 3_000_000;
+
+// These regexps are copied from the convert-source-map package,
+// but without // or /* at the beginning of the comment.
+
+// eslint-disable-next-line max-len
+const INLINE_SOURCEMAP_REGEX =
+  /^[@#]\s+sourceMappingURL=data:(?:application|text)\/json;(?:charset[:=]\S+?;)?base64,(?:.*)$/;
+const EXTERNAL_SOURCEMAP_REGEX =
+  /^[@#][ \t]+sourceMappingURL=([^\s'"`]+)[ \t]*$/;
 
 export type NormalizedFile = {
   code: string;
-  ast: {};
+  ast: t.File;
   inputMap: Converter | null;
 };
 
 export default function* normalizeFile(
   pluginPasses: PluginPasses,
-  options: any,
+  options: { [key: string]: any },
   code: string,
   ast?: t.File | t.Program | null,
 ): Handler<File> {
@@ -36,9 +45,10 @@ export default function* normalizeFile(
     }
 
     if (options.cloneInputAst) {
-      ast = cloneDeep(ast);
+      ast = cloneDeep(ast) as t.File;
     }
   } else {
+    // @ts-expect-error todo: use babel-types ast typings in Babel parser
     ast = yield* parser(pluginPasses, options, code);
   }
 
@@ -91,21 +101,16 @@ export default function* normalizeFile(
 
   return new File(options, {
     code,
-    ast,
+    ast: ast as t.File,
     inputMap,
   });
 }
 
-// These regexps are copied from the convert-source-map package,
-// but without // or /* at the beginning of the comment.
-
-// eslint-disable-next-line max-len
-const INLINE_SOURCEMAP_REGEX =
-  /^[@#]\s+sourceMappingURL=data:(?:application|text)\/json;(?:charset[:=]\S+?;)?base64,(?:.*)$/;
-const EXTERNAL_SOURCEMAP_REGEX =
-  /^[@#][ \t]+sourceMappingURL=([^\s'"`]+)[ \t]*$/;
-
-function extractCommentsFromList(regex, comments, lastComment) {
+function extractCommentsFromList(
+  regex: RegExp,
+  comments: t.Comment[],
+  lastComment: string | null,
+): [t.Comment[], string | null] {
   if (comments) {
     comments = comments.filter(({ value }) => {
       if (regex.test(value)) {
@@ -118,8 +123,8 @@ function extractCommentsFromList(regex, comments, lastComment) {
   return [comments, lastComment];
 }
 
-function extractComments(regex, ast) {
-  let lastComment = null;
+function extractComments(regex: RegExp, ast: t.Node) {
+  let lastComment: string = null;
   traverseFast(ast, node => {
     [node.leadingComments, lastComment] = extractCommentsFromList(
       regex,

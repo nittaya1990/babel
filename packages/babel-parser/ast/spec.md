@@ -572,7 +572,7 @@ A function declaration. Note that unlike in the parent interface `Function`, the
 interface VariableDeclaration <: Declaration {
   type: "VariableDeclaration";
   declarations: [ VariableDeclarator ];
-  kind: "var" | "let" | "const";
+  kind: "var" | "let" | "const" | "using";
 }
 ```
 
@@ -1213,6 +1213,18 @@ interface ClassPrivateProperty <: Node {
 }
 ```
 
+## ClassAccessorProperty
+
+```js
+interface ClassAccessorProperty <: Node {
+  type: "ClassAccessorProperty";
+  key: Expression | PrivateName;
+  value: Expression;
+  static: boolean;
+  computed: boolean;
+}
+```
+
 ## StaticBlock
 
 ```js
@@ -1457,3 +1469,4 @@ interface PipelineBareConstructorBody <: NodeBase {
     type: "PipelineBareAwaitedFunctionBody";
     callee: Expression;
 }
+```

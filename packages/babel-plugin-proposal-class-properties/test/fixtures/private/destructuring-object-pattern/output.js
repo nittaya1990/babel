@@ -1,6 +1,5 @@
 var _client = /*#__PURE__*/new WeakMap();
-
-var Foo = function Foo(props) {
+var Foo = /*#__PURE__*/babelHelpers.createClass(function Foo(props) {
   "use strict";
 
   babelHelpers.classCallCheck(this, Foo);
@@ -11,4 +10,4 @@ var Foo = function Foo(props) {
   ({
     client: babelHelpers.classPrivateFieldDestructureSet(this, _client).value
   } = props);
-};
+});

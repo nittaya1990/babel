@@ -1,13 +1,13 @@
 import { declare } from "@babel/helper-plugin-utils";
+import { isRequired } from "@babel/helper-compilation-targets";
 import annotateAsPure from "@babel/helper-annotate-as-pure";
 import nameFunction from "@babel/helper-function-name";
 import splitExportDeclaration from "@babel/helper-split-export-declaration";
 import { types as t } from "@babel/core";
 import globals from "globals";
 import transformClass from "./transformClass";
-import type { Visitor, NodePath } from "@babel/traverse";
 
-const getBuiltinClasses = category =>
+const getBuiltinClasses = (category: keyof typeof globals) =>
   Object.keys(globals[category]).filter(name => /^[A-Z]/.test(name));
 
 const builtinClasses = new Set([
@@ -15,19 +15,29 @@ const builtinClasses = new Set([
   ...getBuiltinClasses("browser"),
 ]);
 
-export default declare((api, options) => {
+export interface Options {
+  loose?: boolean;
+}
+
+export default declare((api, options: Options) => {
   api.assertVersion(7);
 
-  const { loose } = options;
+  const { loose = false } = options;
 
-  const setClassMethods = api.assumption("setClassMethods") ?? options.loose;
-  const constantSuper = api.assumption("constantSuper") ?? options.loose;
-  const superIsCallableConstructor =
-    api.assumption("superIsCallableConstructor") ?? options.loose;
-  const noClassCalls = api.assumption("noClassCalls") ?? options.loose;
+  const setClassMethods = (api.assumption("setClassMethods") ??
+    loose) as boolean;
+  const constantSuper = (api.assumption("constantSuper") ?? loose) as boolean;
+  const superIsCallableConstructor = (api.assumption(
+    "superIsCallableConstructor",
+  ) ?? loose) as boolean;
+  const noClassCalls = (api.assumption("noClassCalls") ?? loose) as boolean;
+  const supportUnicodeId = !isRequired(
+    "transform-unicode-escapes",
+    api.targets(),
+  );
 
   // todo: investigate traversal requeueing
-  const VISITED = Symbol();
+  const VISITED = new WeakSet();
 
   return {
     name: "transform-classes",
@@ -52,35 +62,41 @@ export default declare((api, options) => {
 
       ClassExpression(path, state) {
         const { node } = path;
-        if (node[VISITED]) return;
+        if (VISITED.has(node)) return;
 
-        const inferred = nameFunction(path);
+        const inferred = nameFunction(path, undefined, supportUnicodeId);
         if (inferred && inferred !== node) {
           path.replaceWith(inferred);
           return;
         }
 
-        node[VISITED] = true;
+        VISITED.add(node);
 
-        path.replaceWith(
-          transformClass(path, state.file, builtinClasses, loose, {
-            setClassMethods,
-            constantSuper,
-            superIsCallableConstructor,
-            noClassCalls,
-          }),
+        const [replacedPath] = path.replaceWith(
+          transformClass(
+            path,
+            state.file,
+            builtinClasses,
+            loose,
+            {
+              setClassMethods,
+              constantSuper,
+              superIsCallableConstructor,
+              noClassCalls,
+            },
+            supportUnicodeId,
+          ),
         );
 
-        if (path.isCallExpression()) {
-          annotateAsPure(path);
-          // todo: improve babel types
-          const callee = path.get("callee") as unknown as NodePath;
+        if (replacedPath.isCallExpression()) {
+          annotateAsPure(replacedPath);
+          const callee = replacedPath.get("callee");
           if (callee.isArrowFunctionExpression()) {
             // This is an IIFE, so we don't need to worry about the noNewArrows assumption
             callee.arrowFunctionToExpression();
           }
         }
       },
-    } as Visitor<any>,
+    },
   };
 });

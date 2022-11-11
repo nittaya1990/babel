@@ -11,6 +11,8 @@ import {
   identifier,
   isIdentifier,
   jsxIdentifier,
+  logicalExpression,
+  LOGICAL_OPERATORS,
   memberExpression,
   metaProperty,
   numericLiteral,
@@ -22,10 +24,13 @@ import {
   stringLiteral,
   super as _super,
   thisExpression,
+  toExpression,
   unaryExpression,
 } from "@babel/types";
 import type * as t from "@babel/types";
+import environmentVisitor from "@babel/helper-environment-visitor";
 import nameFunction from "@babel/helper-function-name";
+import { merge as mergeVisitors } from "../visitors";
 import type NodePath from "./index";
 
 export function toComputedKey(this: NodePath) {
@@ -89,7 +94,10 @@ export function ensureBlock(
   const parentPath = this.get(stringPath) as NodePath;
   body.setup(
     parentPath,
-    listKey ? parentPath.node[listKey] : parentPath.node,
+    listKey
+      ? // @ts-expect-error listKey must present in parent path
+        parentPath.node[listKey]
+      : parentPath.node,
     listKey,
     key,
   );
@@ -127,46 +135,58 @@ export function unwrapFunctionEnvironment(this: NodePath) {
   hoistFunctionEnvironment(this);
 }
 
+function setType<N extends t.Node, T extends N["type"]>(
+  path: NodePath<N>,
+  type: T,
+): asserts path is NodePath<Extract<N, { type: T }>> {
+  path.node.type = type;
+}
+
 /**
  * Convert a given arrow function into a normal ES5 function expression.
  */
 export function arrowFunctionToExpression(
-  this: NodePath,
+  this: NodePath<t.ArrowFunctionExpression>,
   {
     allowInsertArrow = true,
     /** @deprecated Use `noNewArrows` instead */
     specCompliant = false,
     // TODO(Babel 8): Consider defaulting to `false` for spec compliancy
     noNewArrows = !specCompliant,
+  }: {
+    allowInsertArrow?: boolean | void;
+    specCompliant?: boolean | void;
+    noNewArrows?: boolean;
   } = {},
-) {
+): NodePath<Exclude<t.Function, t.Method | t.ArrowFunctionExpression>> {
   if (!this.isArrowFunctionExpression()) {
-    throw this.buildCodeFrameError(
+    throw (this as NodePath).buildCodeFrameError(
       "Cannot convert non-arrow function to a function expression.",
     );
   }
 
-  const thisBinding = hoistFunctionEnvironment(
+  const { thisBinding, fnPath: fn } = hoistFunctionEnvironment(
     this,
     noNewArrows,
     allowInsertArrow,
   );
 
-  this.ensureBlock();
-  // @ts-expect-error todo(flow->ts): avoid mutating nodes
-  this.node.type = "FunctionExpression";
+  // @ts-expect-error TS requires explicit fn type annotation
+  fn.ensureBlock();
+  setType(fn, "FunctionExpression");
+
   if (!noNewArrows) {
     const checkBinding = thisBinding
       ? null
-      : this.parentPath.scope.generateUidIdentifier("arrowCheckId");
+      : fn.scope.generateUidIdentifier("arrowCheckId");
     if (checkBinding) {
-      this.parentPath.scope.push({
+      fn.parentPath.scope.push({
         id: checkBinding,
         init: objectExpression([]),
       });
     }
 
-    this.get("body").unshiftContainer(
+    fn.get("body").unshiftContainer(
       "body",
       expressionStatement(
         callExpression(this.hub.addHelper("newArrowCheck"), [
@@ -178,41 +198,85 @@ export function arrowFunctionToExpression(
       ),
     );
 
-    this.replaceWith(
+    fn.replaceWith(
       callExpression(
         memberExpression(
-          nameFunction(this, true) || this.node,
+          // @ts-expect-error TS can't infer nameFunction returns CallExpression | ArrowFunctionExpression here
+          nameFunction(this, true) || fn.node,
           identifier("bind"),
         ),
         [checkBinding ? identifier(checkBinding.name) : thisExpression()],
       ),
     );
+
+    return fn.get("callee.object");
   }
+
+  return fn;
 }
+
+const getSuperCallsVisitor = mergeVisitors<{
+  allSuperCalls: NodePath<t.CallExpression>[];
+}>([
+  {
+    CallExpression(child, { allSuperCalls }) {
+      if (!child.get("callee").isSuper()) return;
+      allSuperCalls.push(child);
+    },
+  },
+  environmentVisitor,
+]);
 
 /**
  * Given a function, traverse its contents, and if there are references to "this", "arguments", "super",
  * or "new.target", ensure that these references reference the parent environment around this function.
+ *
+ * @returns `thisBinding`: the name of the injected reference to `this`; for example "_this"
+ * @returns `fnPath`: the new path to the function node. This is different from the fnPath
+ *                    parameter when the function node is wrapped in another node.
  */
 function hoistFunctionEnvironment(
-  fnPath,
+  fnPath: NodePath<t.Function>,
   // TODO(Babel 8): Consider defaulting to `false` for spec compliancy
-  noNewArrows = true,
-  allowInsertArrow = true,
-) {
-  const thisEnvFn = fnPath.findParent(p => {
+  noNewArrows: boolean | void = true,
+  allowInsertArrow: boolean | void = true,
+): { thisBinding: string; fnPath: NodePath<t.Function> } {
+  let arrowParent;
+  let thisEnvFn: NodePath<t.Function> = fnPath.findParent(p => {
+    if (p.isArrowFunctionExpression()) {
+      arrowParent ??= p;
+      return false;
+    }
     return (
-      (p.isFunction() && !p.isArrowFunctionExpression()) ||
+      p.isFunction() ||
       p.isProgram() ||
-      p.isClassProperty({ static: false })
+      p.isClassProperty({ static: false }) ||
+      p.isClassPrivateProperty({ static: false })
     );
-  });
-  const inConstructor = thisEnvFn?.node.kind === "constructor";
+  }) as NodePath<t.Function>;
+  const inConstructor = thisEnvFn.isClassMethod({ kind: "constructor" });
 
-  if (thisEnvFn.isClassProperty()) {
-    throw fnPath.buildCodeFrameError(
-      "Unable to transform arrow inside class property",
-    );
+  if (thisEnvFn.isClassProperty() || thisEnvFn.isClassPrivateProperty()) {
+    if (arrowParent) {
+      thisEnvFn = arrowParent;
+    } else if (allowInsertArrow) {
+      // It's safe to wrap this function in another and not hoist to the
+      // top level because the 'this' binding is constant in class
+      // properties (since 'super()' has already been called), so we don't
+      // need to capture/reassign it at the top level.
+      fnPath.replaceWith(
+        callExpression(
+          arrowFunctionExpression([], toExpression(fnPath.node)),
+          [],
+        ),
+      );
+      thisEnvFn = fnPath.get("callee") as NodePath<t.ArrowFunctionExpression>;
+      fnPath = thisEnvFn.get("body") as NodePath<t.FunctionExpression>;
+    } else {
+      throw fnPath.buildCodeFrameError(
+        "Unable to transform arrow inside class property",
+      );
+    }
   }
 
   const { thisPaths, argumentsPaths, newTargetPaths, superProps, superCalls } =
@@ -225,20 +289,8 @@ function hoistFunctionEnvironment(
         "Unable to handle nested super() usage in arrow",
       );
     }
-    const allSuperCalls = [];
-    thisEnvFn.traverse({
-      Function(child) {
-        if (child.isArrowFunctionExpression()) return;
-        child.skip();
-      },
-      ClassProperty(child) {
-        child.skip();
-      },
-      CallExpression(child) {
-        if (!child.get("callee").isSuper()) return;
-        allSuperCalls.push(child);
-      },
-    });
+    const allSuperCalls: NodePath<t.CallExpression>[] = [];
+    thisEnvFn.traverse(getSuperCallsVisitor, { allSuperCalls });
     const superBinding = getSuperBinding(thisEnvFn);
     allSuperCalls.forEach(superCall => {
       const callee = identifier(superBinding);
@@ -297,7 +349,7 @@ function hoistFunctionEnvironment(
       );
     }
 
-    const flatSuperProps = superProps.reduce(
+    const flatSuperProps: NodePath<t.MemberExpression>[] = superProps.reduce(
       (acc, superProp) => acc.concat(standardizeSuperProperty(superProp)),
       [],
     );
@@ -305,36 +357,55 @@ function hoistFunctionEnvironment(
     flatSuperProps.forEach(superProp => {
       const key = superProp.node.computed
         ? ""
-        : superProp.get("property").node.name;
+        : // @ts-expect-error super property must not contain private name
+          superProp.get("property").node.name;
 
-      const isAssignment = superProp.parentPath.isAssignmentExpression({
+      const superParentPath = superProp.parentPath;
+
+      const isAssignment = superParentPath.isAssignmentExpression({
         left: superProp.node,
       });
-      const isCall = superProp.parentPath.isCallExpression({
+      const isCall = superParentPath.isCallExpression({
         callee: superProp.node,
+      });
+      const isTaggedTemplate = superParentPath.isTaggedTemplateExpression({
+        tag: superProp.node,
       });
       const superBinding = getSuperPropBinding(thisEnvFn, isAssignment, key);
 
-      const args = [];
+      const args: t.Expression[] = [];
       if (superProp.node.computed) {
-        args.push(superProp.get("property").node);
+        // SuperProperty must not be a private name
+        args.push(superProp.get("property").node as t.Expression);
       }
 
       if (isAssignment) {
-        const value = superProp.parentPath.node.right;
+        const value = superParentPath.node.right;
         args.push(value);
       }
 
       const call = callExpression(identifier(superBinding), args);
 
       if (isCall) {
-        superProp.parentPath.unshiftContainer("arguments", thisExpression());
+        superParentPath.unshiftContainer("arguments", thisExpression());
         superProp.replaceWith(memberExpression(call, identifier("call")));
 
-        thisPaths.push(superProp.parentPath.get("arguments.0"));
+        thisPaths.push(
+          superParentPath.get("arguments.0") as NodePath<t.ThisExpression>,
+        );
       } else if (isAssignment) {
         // Replace not only the super.prop, but the whole assignment
-        superProp.parentPath.replaceWith(call);
+        superParentPath.replaceWith(call);
+      } else if (isTaggedTemplate) {
+        superProp.replaceWith(
+          callExpression(memberExpression(call, identifier("bind"), false), [
+            thisExpression(),
+          ]),
+        );
+
+        thisPaths.push(
+          superProp.get("arguments.0") as NodePath<t.ThisExpression>,
+        );
       } else {
         superProp.replaceWith(call);
       }
@@ -342,7 +413,7 @@ function hoistFunctionEnvironment(
   }
 
   // Convert all "this" references in the arrow to point at the alias.
-  let thisBinding;
+  let thisBinding: string | null;
   if (thisPaths.length > 0 || !noNewArrows) {
     thisBinding = getThisBinding(thisEnvFn, inConstructor);
 
@@ -365,29 +436,53 @@ function hoistFunctionEnvironment(
     }
   }
 
-  return thisBinding;
+  return { thisBinding, fnPath };
 }
 
-function standardizeSuperProperty(superProp) {
+type LogicalOp = Parameters<typeof logicalExpression>[0];
+type BinaryOp = Parameters<typeof binaryExpression>[0];
+
+function isLogicalOp(op: string): op is LogicalOp {
+  return LOGICAL_OPERATORS.includes(op);
+}
+
+function standardizeSuperProperty(
+  superProp: NodePath<t.MemberExpression>,
+):
+  | [NodePath<t.MemberExpression>]
+  | [NodePath<t.MemberExpression>, NodePath<t.MemberExpression>] {
   if (
     superProp.parentPath.isAssignmentExpression() &&
     superProp.parentPath.node.operator !== "="
   ) {
     const assignmentPath = superProp.parentPath;
 
-    const op = assignmentPath.node.operator.slice(0, -1);
+    const op = assignmentPath.node.operator.slice(0, -1) as
+      | LogicalOp
+      | BinaryOp;
+
     const value = assignmentPath.node.right;
 
-    assignmentPath.node.operator = "=";
+    const isLogicalAssignment = isLogicalOp(op);
+
     if (superProp.node.computed) {
+      // from: super[foo] **= 4;
+      // to:   super[tmp = foo] = super[tmp] ** 4;
+
+      // from: super[foo] ??= 4;
+      // to:   super[tmp = foo] ?? super[tmp] = 4;
+
       const tmp = superProp.scope.generateDeclaredUidIdentifier("tmp");
+
+      const object = superProp.node.object;
+      const property = superProp.node.property as t.Expression;
 
       assignmentPath
         .get("left")
         .replaceWith(
           memberExpression(
-            superProp.node.object,
-            assignmentExpression("=", tmp, superProp.node.property),
+            object,
+            assignmentExpression("=", tmp, property),
             true /* computed */,
           ),
         );
@@ -395,38 +490,51 @@ function standardizeSuperProperty(superProp) {
       assignmentPath
         .get("right")
         .replaceWith(
-          binaryExpression(
-            op,
-            memberExpression(
-              superProp.node.object,
-              identifier(tmp.name),
-              true /* computed */,
-            ),
+          rightExpression(
+            isLogicalAssignment ? "=" : op,
+            memberExpression(object, identifier(tmp.name), true /* computed */),
             value,
           ),
         );
     } else {
+      // from: super.foo **= 4;
+      // to:   super.foo = super.foo ** 4;
+
+      // from: super.foo ??= 4;
+      // to:   super.foo ?? super.foo = 4;
+
+      const object = superProp.node.object;
+      const property = superProp.node.property as t.Identifier;
+
       assignmentPath
         .get("left")
-        .replaceWith(
-          memberExpression(superProp.node.object, superProp.node.property),
-        );
+        .replaceWith(memberExpression(object, property));
 
       assignmentPath
         .get("right")
         .replaceWith(
-          binaryExpression(
-            op,
-            memberExpression(
-              superProp.node.object,
-              identifier(superProp.node.property.name),
-            ),
+          rightExpression(
+            isLogicalAssignment ? "=" : op,
+            memberExpression(object, identifier(property.name)),
             value,
           ),
         );
     }
+
+    if (isLogicalAssignment) {
+      assignmentPath.replaceWith(
+        logicalExpression(
+          op,
+          assignmentPath.node.left as t.MemberExpression,
+          assignmentPath.node.right as t.Expression,
+        ),
+      );
+    } else {
+      assignmentPath.node.operator = "=";
+    }
+
     return [
-      assignmentPath.get("left"),
+      assignmentPath.get("left") as NodePath<t.MemberExpression>,
       assignmentPath.get("right").get("left"),
     ];
   } else if (superProp.parentPath.isUpdateExpression()) {
@@ -444,7 +552,11 @@ function standardizeSuperProperty(superProp) {
         memberExpression(
           superProp.node.object,
           computedKey
-            ? assignmentExpression("=", computedKey, superProp.node.property)
+            ? assignmentExpression(
+                "=",
+                computedKey,
+                superProp.node.property as t.Expression,
+              )
             : superProp.node.property,
           superProp.node.computed,
         ),
@@ -456,7 +568,12 @@ function standardizeSuperProperty(superProp) {
           computedKey ? identifier(computedKey.name) : superProp.node.property,
           superProp.node.computed,
         ),
-        binaryExpression("+", identifier(tmp.name), numericLiteral(1)),
+        binaryExpression(
+          // map `++` to `+`, and `--` to `-`
+          superProp.parentPath.node.operator[0] as "+" | "-",
+          identifier(tmp.name),
+          numericLiteral(1),
+        ),
       ),
     ];
 
@@ -466,55 +583,73 @@ function standardizeSuperProperty(superProp) {
 
     updateExpr.replaceWith(sequenceExpression(parts));
 
-    const left = updateExpr.get("expressions.0.right");
-    const right = updateExpr.get("expressions.1.left");
+    const left = updateExpr.get(
+      "expressions.0.right",
+    ) as NodePath<t.MemberExpression>;
+    const right = updateExpr.get(
+      "expressions.1.left",
+    ) as NodePath<t.MemberExpression>;
     return [left, right];
   }
 
   return [superProp];
+
+  function rightExpression(
+    op: BinaryOp | "=",
+    left: t.MemberExpression,
+    right: t.Expression,
+  ) {
+    if (op === "=") {
+      return assignmentExpression("=", left, right);
+    } else {
+      return binaryExpression(op, left, right);
+    }
+  }
 }
 
-function hasSuperClass(thisEnvFn) {
+function hasSuperClass(thisEnvFn: NodePath<t.Function>) {
   return (
     thisEnvFn.isClassMethod() &&
-    !!thisEnvFn.parentPath.parentPath.node.superClass
+    !!(thisEnvFn.parentPath.parentPath.node as t.Class).superClass
   );
 }
 
+const assignSuperThisVisitor = mergeVisitors<{
+  supers: WeakSet<t.CallExpression>;
+  thisBinding: string;
+}>([
+  {
+    CallExpression(child, { supers, thisBinding }) {
+      if (!child.get("callee").isSuper()) return;
+      if (supers.has(child.node)) return;
+      supers.add(child.node);
+
+      child.replaceWithMultiple([
+        child.node,
+        assignmentExpression("=", identifier(thisBinding), identifier("this")),
+      ]);
+    },
+  },
+  environmentVisitor,
+]);
+
 // Create a binding that evaluates to the "this" of the given function.
-function getThisBinding(thisEnvFn, inConstructor) {
+function getThisBinding(
+  thisEnvFn: NodePath<t.Function>,
+  inConstructor: boolean,
+) {
   return getBinding(thisEnvFn, "this", thisBinding => {
     if (!inConstructor || !hasSuperClass(thisEnvFn)) return thisExpression();
 
-    const supers = new WeakSet();
-    thisEnvFn.traverse({
-      Function(child) {
-        if (child.isArrowFunctionExpression()) return;
-        child.skip();
-      },
-      ClassProperty(child) {
-        child.skip();
-      },
-      CallExpression(child) {
-        if (!child.get("callee").isSuper()) return;
-        if (supers.has(child.node)) return;
-        supers.add(child.node);
-
-        child.replaceWithMultiple([
-          child.node,
-          assignmentExpression(
-            "=",
-            identifier(thisBinding),
-            identifier("this"),
-          ),
-        ]);
-      },
+    thisEnvFn.traverse(assignSuperThisVisitor, {
+      supers: new WeakSet(),
+      thisBinding,
     });
   });
 }
 
 // Create a binding for a function that will call "super()" with arguments passed through.
-function getSuperBinding(thisEnvFn) {
+function getSuperBinding(thisEnvFn: NodePath<t.Function>) {
   return getBinding(thisEnvFn, "supercall", () => {
     const argsBinding = thisEnvFn.scope.generateUidIdentifier("args");
     return arrowFunctionExpression(
@@ -525,7 +660,11 @@ function getSuperBinding(thisEnvFn) {
 }
 
 // Create a binding for a function that will call "super.foo" or "super[foo]".
-function getSuperPropBinding(thisEnvFn, isAssignment, propName) {
+function getSuperPropBinding(
+  thisEnvFn: NodePath<t.Function>,
+  isAssignment: boolean,
+  propName: string,
+) {
   const op = isAssignment ? "set" : "get";
 
   return getBinding(thisEnvFn, `superprop_${op}:${propName || ""}`, () => {
@@ -557,9 +696,13 @@ function getSuperPropBinding(thisEnvFn, isAssignment, propName) {
   });
 }
 
-function getBinding(thisEnvFn, key, init) {
+function getBinding(
+  thisEnvFn: NodePath,
+  key: string,
+  init: (name: string) => t.Expression,
+) {
   const cacheKey = "binding:" + key;
-  let data = thisEnvFn.getData(cacheKey);
+  let data: string | undefined = thisEnvFn.getData(cacheKey);
   if (!data) {
     const id = thisEnvFn.scope.generateUidIdentifier(key);
     data = id.name;
@@ -574,25 +717,20 @@ function getBinding(thisEnvFn, key, init) {
   return data;
 }
 
-function getScopeInformation(fnPath) {
-  const thisPaths = [];
-  const argumentsPaths = [];
-  const newTargetPaths = [];
-  const superProps = [];
-  const superCalls = [];
+type ScopeInfo = {
+  thisPaths: NodePath<t.ThisExpression | t.JSXIdentifier>[];
+  superCalls: NodePath<t.CallExpression>[];
+  superProps: NodePath<t.MemberExpression>[];
+  argumentsPaths: NodePath<t.Identifier | t.JSXIdentifier>[];
+  newTargetPaths: NodePath<t.MetaProperty>[];
+};
 
-  fnPath.traverse({
-    ClassProperty(child) {
-      child.skip();
-    },
-    Function(child) {
-      if (child.isArrowFunctionExpression()) return;
-      child.skip();
-    },
-    ThisExpression(child) {
+const getScopeInformationVisitor = mergeVisitors<ScopeInfo>([
+  {
+    ThisExpression(child, { thisPaths }) {
       thisPaths.push(child);
     },
-    JSXIdentifier(child) {
+    JSXIdentifier(child, { thisPaths }) {
       if (child.node.name !== "this") return;
       if (
         !child.parentPath.isJSXMemberExpression({ object: child.node }) &&
@@ -603,14 +741,14 @@ function getScopeInformation(fnPath) {
 
       thisPaths.push(child);
     },
-    CallExpression(child) {
+    CallExpression(child, { superCalls }) {
       if (child.get("callee").isSuper()) superCalls.push(child);
     },
-    MemberExpression(child) {
+    MemberExpression(child, { superProps }) {
       if (child.get("object").isSuper()) superProps.push(child);
     },
-    ReferencedIdentifier(child) {
-      if (child.node.name !== "arguments") return;
+    Identifier(child, { argumentsPaths }) {
+      if (!child.isReferencedIdentifier({ name: "arguments" })) return;
 
       let curr = child.scope;
       do {
@@ -625,12 +763,29 @@ function getScopeInformation(fnPath) {
 
       argumentsPaths.push(child);
     },
-    MetaProperty(child) {
+    MetaProperty(child, { newTargetPaths }) {
       if (!child.get("meta").isIdentifier({ name: "new" })) return;
       if (!child.get("property").isIdentifier({ name: "target" })) return;
 
       newTargetPaths.push(child);
     },
+  },
+  environmentVisitor,
+]);
+
+function getScopeInformation(fnPath: NodePath) {
+  const thisPaths: ScopeInfo["thisPaths"] = [];
+  const argumentsPaths: ScopeInfo["argumentsPaths"] = [];
+  const newTargetPaths: ScopeInfo["newTargetPaths"] = [];
+  const superProps: ScopeInfo["superProps"] = [];
+  const superCalls: ScopeInfo["superCalls"] = [];
+
+  fnPath.traverse(getScopeInformationVisitor, {
+    thisPaths,
+    argumentsPaths,
+    newTargetPaths,
+    superProps,
+    superCalls,
   });
 
   return {

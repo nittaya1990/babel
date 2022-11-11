@@ -1,9 +1,14 @@
-import assert from "assert";
 import { template } from "@babel/core";
-import type * as t from "@babel/types";
 import type { NodePath } from "@babel/traverse";
+import type * as t from "@babel/types";
+import assert from "assert";
 
-export default function transpileEnum(path, t) {
+type t = typeof t;
+
+export default function transpileEnum(
+  path: NodePath<t.TSEnumDeclaration>,
+  t: t,
+) {
   const { node } = path;
 
   if (node.declare) {
@@ -34,7 +39,7 @@ export default function transpileEnum(path, t) {
       throw new Error(`Unexpected enum parent '${path.parent.type}`);
   }
 
-  function seen(parentPath: NodePath<t.Node>) {
+  function seen(parentPath: NodePath<t.Node>): boolean {
     if (parentPath.isExportDeclaration()) {
       return seen(parentPath.parentPath);
     }
@@ -48,7 +53,7 @@ export default function transpileEnum(path, t) {
   }
 }
 
-function makeVar(id, t, kind) {
+function makeVar(id: t.Identifier, t: t, kind: "var" | "let" | "const") {
   return t.variableDeclaration(kind, [t.variableDeclarator(id)]);
 }
 
@@ -66,14 +71,14 @@ const buildNumericAssignment = template(`
   ENUM[ENUM["NAME"] = VALUE] = "NAME";
 `);
 
-const buildEnumMember = (isString, options) =>
+const buildEnumMember = (isString: boolean, options: Record<string, unknown>) =>
   (isString ? buildStringAssignment : buildNumericAssignment)(options);
 
 /**
  * Generates the statement that fills in the variable declared by the enum.
  * `(function (E) { ... assignments ... })(E || (E = {}));`
  */
-function enumFill(path, t, id) {
+function enumFill(path: NodePath<t.TSEnumDeclaration>, t: t, id: t.Identifier) {
   const x = translateEnumValues(path, t);
   const assignments = x.map(([memberName, memberValue]) =>
     buildEnumMember(t.isStringLiteral(memberValue), {
@@ -98,59 +103,102 @@ function enumFill(path, t, id) {
  *     Z = X | Y,
  *   }
  */
-type PreviousEnumMembers = {
-  [name: string]: number | string;
+type PreviousEnumMembers = Map<string, number | string>;
+
+type EnumSelfReferenceVisitorState = {
+  seen: PreviousEnumMembers;
+  path: NodePath<t.TSEnumDeclaration>;
+  t: t;
+};
+
+function ReferencedIdentifier(
+  expr: NodePath<t.Identifier>,
+  state: EnumSelfReferenceVisitorState,
+) {
+  const { seen, path, t } = state;
+  const name = expr.node.name;
+  if (seen.has(name) && !expr.scope.hasOwnBinding(name)) {
+    expr.replaceWith(
+      t.memberExpression(t.cloneNode(path.node.id), t.cloneNode(expr.node)),
+    );
+    expr.skip();
+  }
+}
+
+const enumSelfReferenceVisitor = {
+  ReferencedIdentifier,
 };
 
 export function translateEnumValues(
   path: NodePath<t.TSEnumDeclaration>,
-  t: typeof import("@babel/types"),
+  t: t,
 ): Array<[name: string, value: t.Expression]> {
-  const seen: PreviousEnumMembers = Object.create(null);
+  const seen: PreviousEnumMembers = new Map();
   // Start at -1 so the first enum member is its increment, 0.
-  let prev: number | typeof undefined = -1;
-  return path.node.members.map(member => {
+  let constValue: number | string | undefined = -1;
+  let lastName: string;
+
+  return path.get("members").map(memberPath => {
+    const member = memberPath.node;
     const name = t.isIdentifier(member.id) ? member.id.name : member.id.value;
     const initializer = member.initializer;
     let value: t.Expression;
     if (initializer) {
-      const constValue = evaluate(initializer, seen);
+      constValue = evaluate(initializer, seen);
       if (constValue !== undefined) {
-        seen[name] = constValue;
+        seen.set(name, constValue);
         if (typeof constValue === "number") {
           value = t.numericLiteral(constValue);
-          prev = constValue;
         } else {
           assert(typeof constValue === "string");
           value = t.stringLiteral(constValue);
-          prev = undefined;
         }
       } else {
-        value = initializer;
-        prev = undefined;
+        const initializerPath = memberPath.get("initializer");
+
+        if (initializerPath.isReferencedIdentifier()) {
+          ReferencedIdentifier(initializerPath, {
+            t,
+            seen,
+            path,
+          });
+        } else {
+          initializerPath.traverse(enumSelfReferenceVisitor, { t, seen, path });
+        }
+
+        value = initializerPath.node;
+        seen.set(name, undefined);
       }
+    } else if (typeof constValue === "number") {
+      constValue += 1;
+      value = t.numericLiteral(constValue);
+      seen.set(name, constValue);
+    } else if (typeof constValue === "string") {
+      throw path.buildCodeFrameError("Enum member must have initializer.");
     } else {
-      if (prev !== undefined) {
-        prev++;
-        value = t.numericLiteral(prev);
-        seen[name] = prev;
-      } else {
-        throw path.buildCodeFrameError("Enum member must have initializer.");
-      }
+      // create dynamic initializer: 1 + ENUM["PREVIOUS"]
+      const lastRef = t.memberExpression(
+        t.cloneNode(path.node.id),
+        t.stringLiteral(lastName),
+        true,
+      );
+      value = t.binaryExpression("+", t.numericLiteral(1), lastRef);
+      seen.set(name, undefined);
     }
 
+    lastName = name;
     return [name, value];
   });
 }
 
 // Based on the TypeScript repository's `evalConstant` in `checker.ts`.
 function evaluate(
-  expr,
+  expr: t.Node,
   seen: PreviousEnumMembers,
 ): number | string | typeof undefined {
   return evalConstant(expr);
 
-  function evalConstant(expr): number | typeof undefined {
+  function evalConstant(expr: t.Node): number | typeof undefined {
     switch (expr.type) {
       case "StringLiteral":
         return expr.value;
@@ -163,7 +211,7 @@ function evaluate(
       case "ParenthesizedExpression":
         return evalConstant(expr.expression);
       case "Identifier":
-        return seen[expr.name];
+        return seen.get(expr.name);
       case "TemplateLiteral":
         if (expr.quasis.length === 1) {
           return expr.quasis[0].value.cooked;
@@ -177,7 +225,7 @@ function evaluate(
   function evalUnaryExpression({
     argument,
     operator,
-  }): number | typeof undefined {
+  }: t.UnaryExpression): number | typeof undefined {
     const value = evalConstant(argument);
     if (value === undefined) {
       return undefined;
@@ -195,7 +243,7 @@ function evaluate(
     }
   }
 
-  function evalBinaryExpression(expr): number | typeof undefined {
+  function evalBinaryExpression(expr: t.BinaryExpression): number | undefined {
     const left = evalConstant(expr.left);
     if (left === undefined) {
       return undefined;

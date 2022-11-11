@@ -3,7 +3,7 @@ import type * as t from "@babel/types";
 type SourceMap = any;
 import type { Handler } from "gensync";
 
-import type { ResolvedConfig, PluginPasses } from "../config";
+import type { ResolvedConfig, Plugin, PluginPasses } from "../config";
 
 import PluginPass from "./plugin-pass";
 import loadBlockHoistPlugin from "./block-hoist-plugin";
@@ -13,18 +13,21 @@ import normalizeFile from "./normalize-file";
 import generateCode from "./file/generate";
 import type File from "./file/file";
 
+import { flattenToSet } from "../config/helpers/deep-array";
+
 export type FileResultCallback = {
-  (err: Error, file: null): any;
-  (err: null, file: FileResult | null): any;
+  (err: Error, file: null): void;
+  (err: null, file: FileResult | null): void;
 };
 
 export type FileResult = {
-  metadata: {};
-  options: {};
-  ast: {} | null;
+  metadata: { [key: string]: any };
+  options: { [key: string]: any };
+  ast: t.File | null;
   code: string | null;
   map: SourceMap | null;
-  sourceType: "string" | "module";
+  sourceType: "script" | "module";
+  externalDependencies: Set<string>;
 };
 
 export function* run(
@@ -43,7 +46,7 @@ export function* run(
   try {
     yield* transformFile(file, config.passes);
   } catch (e) {
-    e.message = `${opts.filename ?? "unknown"}: ${e.message}`;
+    e.message = `${opts.filename ?? "unknown file"}: ${e.message}`;
     if (!e.code) {
       e.code = "BABEL_TRANSFORM_ERROR";
     }
@@ -56,7 +59,7 @@ export function* run(
       ({ outputCode, outputMap } = generateCode(config.passes, file));
     }
   } catch (e) {
-    e.message = `${opts.filename ?? "unknown"}: ${e.message}`;
+    e.message = `${opts.filename ?? "unknown file"}: ${e.message}`;
     if (!e.code) {
       e.code = "BABEL_GENERATE_ERROR";
     }
@@ -70,12 +73,13 @@ export function* run(
     code: outputCode === undefined ? null : outputCode,
     map: outputMap === undefined ? null : outputMap,
     sourceType: file.ast.program.sourceType,
+    externalDependencies: flattenToSet(config.externalDependencies),
   };
 }
 
 function* transformFile(file: File, pluginPasses: PluginPasses): Handler<void> {
   for (const pluginPairs of pluginPasses) {
-    const passPairs = [];
+    const passPairs: [Plugin, PluginPass][] = [];
     const passes = [];
     const visitors = [];
 

@@ -11,8 +11,8 @@ import {
 } from "@babel/types";
 import type * as t from "@babel/types";
 
-const NORMAL_COMPLETION = 0;
-const BREAK_COMPLETION = 1;
+const NORMAL_COMPLETION = 0 as const;
+const BREAK_COMPLETION = 1 as const;
 
 type Completion = {
   path: NodePath;
@@ -65,7 +65,7 @@ function completionRecordForSwitch(
   context: CompletionContext,
 ): Completion[] {
   // https://tc39.es/ecma262/#sec-runtime-semantics-caseblockevaluation
-  let lastNormalCompletions = [];
+  let lastNormalCompletions: Completion[] = [];
   for (let i = 0; i < cases.length; i++) {
     const casePath = cases[i];
     const caseCompletions = _getCompletionRecords(casePath, context);
@@ -227,7 +227,7 @@ function _getCompletionRecords(
   path: NodePath,
   context: CompletionContext,
 ): Completion[] {
-  let records = [];
+  let records: Completion[] = [];
   if (path.isIfStatement()) {
     records = addCompletionRecords(path.get("consequent"), records, context);
     records = addCompletionRecords(path.get("alternate"), records, context);
@@ -398,6 +398,7 @@ function get<T extends t.Node>(
   const parts = key.split(".");
   if (parts.length === 1) {
     // "foo"
+    // @ts-expect-error key may not index T
     return this._getKey(key, context);
   } else {
     // "foo.bar"
@@ -409,7 +410,7 @@ export { get };
 
 export function _getKey<T extends t.Node>(
   this: NodePath<T>,
-  key: string,
+  key: keyof T & string,
   context?: TraversalContext,
 ): NodePath | NodePath[] {
   const node = this.node;
@@ -448,6 +449,7 @@ export function _getPattern(
       path = path.parentPath;
     } else {
       if (Array.isArray(path)) {
+        // @ts-expect-error part may not index path
         path = path[part];
       } else {
         path = path.get(part, context);
@@ -468,6 +470,7 @@ function getBindingIdentifiers(
 ): Record<string, t.Identifier[] | t.Identifier>;
 
 function getBindingIdentifiers(
+  this: NodePath,
   duplicates?: boolean,
 ): Record<string, t.Identifier[] | t.Identifier> {
   return _getBindingIdentifiers(this.node, duplicates);
@@ -486,6 +489,7 @@ function getOuterBindingIdentifiers(
 ): Record<string, t.Identifier[] | t.Identifier>;
 
 function getOuterBindingIdentifiers(
+  this: NodePath,
   duplicates?: boolean,
 ): Record<string, t.Identifier[] | t.Identifier> {
   return _getOuterBindingIdentifiers(this.node, duplicates);
@@ -493,16 +497,26 @@ function getOuterBindingIdentifiers(
 
 export { getOuterBindingIdentifiers };
 
+function getBindingIdentifierPaths(
+  duplicates: true,
+  outerOnly?: boolean,
+): Record<string, NodePath<t.Identifier>[]>;
+function getBindingIdentifierPaths(
+  duplicates: false,
+  outerOnly?: boolean,
+): Record<string, NodePath<t.Identifier>>;
+function getBindingIdentifierPaths(
+  duplicates?: boolean,
+  outerOnly?: boolean,
+): Record<string, NodePath<t.Identifier> | NodePath<t.Identifier>[]>;
+
 // original source - https://github.com/babel/babel/blob/main/packages/babel-types/src/retrievers/getBindingIdentifiers.js
-// path.getBindingIdentifiers returns nodes where the following re-implementation
-// returns paths
-export function getBindingIdentifierPaths(
+// path.getBindingIdentifiers returns nodes where the following re-implementation returns paths
+function getBindingIdentifierPaths(
   this: NodePath,
   duplicates: boolean = false,
   outerOnly: boolean = false,
-): {
-  [x: string]: NodePath;
-} {
+): Record<string, NodePath<t.Identifier> | NodePath<t.Identifier>[]> {
   const path = this;
   const search = [path];
   const ids = Object.create(null);
@@ -512,7 +526,9 @@ export function getBindingIdentifierPaths(
     if (!id) continue;
     if (!id.node) continue;
 
-    const keys = _getBindingIdentifiers.keys[id.node.type];
+    const keys =
+      // @ts-expect-error _getBindingIdentifiers.keys do not cover all node types
+      _getBindingIdentifiers.keys[id.node.type];
 
     if (id.isIdentifier()) {
       if (duplicates) {
@@ -555,15 +571,26 @@ export function getBindingIdentifierPaths(
     }
   }
 
-  // $FlowIssue Object.create() is object type
   return ids;
 }
 
-export function getOuterBindingIdentifierPaths(
-  this: NodePath,
+export { getBindingIdentifierPaths };
+
+function getOuterBindingIdentifierPaths(
+  duplicates: true,
+): Record<string, NodePath<t.Identifier>[]>;
+function getOuterBindingIdentifierPaths(
+  duplicates?: false,
+): Record<string, NodePath<t.Identifier>>;
+function getOuterBindingIdentifierPaths(
   duplicates?: boolean,
-): {
-  [x: string]: NodePath;
-} {
+): Record<string, NodePath<t.Identifier> | NodePath<t.Identifier>[]>;
+
+function getOuterBindingIdentifierPaths(
+  this: NodePath,
+  duplicates: boolean = false,
+) {
   return this.getBindingIdentifierPaths(duplicates, true);
 }
+
+export { getOuterBindingIdentifierPaths };

@@ -2,31 +2,32 @@
 
 Using targets:
 {
-  "android": "90",
-  "chrome": "90",
-  "edge": "90",
-  "firefox": "88",
-  "ios": "14",
-  "opera": "75",
-  "safari": "14",
-  "samsung": "13"
+  "android": "104",
+  "chrome": "104",
+  "edge": "104",
+  "firefox": "103",
+  "ios": "15.5",
+  "opera": "89",
+  "safari": "15.5",
+  "samsung": "17"
 }
 
 Using modules transform: auto
 
 Using plugins:
-  proposal-private-property-in-object { android, chrome < 91, edge, firefox < 90, ios, opera, safari, samsung }
-  proposal-class-properties { firefox < 90, ios, safari < 15, samsung }
-  proposal-private-methods { firefox < 90, ios, safari < 15, samsung }
+  proposal-class-static-block { ios, safari, samsung }
+  proposal-private-property-in-object { samsung }
+  syntax-class-properties
   syntax-numeric-separator
-  proposal-logical-assignment-operators { samsung }
   syntax-nullish-coalescing-operator
-  proposal-optional-chaining { android, chrome, edge, opera, samsung }
+  syntax-optional-chaining
   syntax-json-strings
   syntax-optional-catch-binding
   syntax-async-generators
   syntax-object-rest-spread
   proposal-export-namespace-from { ios, safari }
+  bugfix/transform-safari-id-destructuring-collision-in-function-expression { ios, safari }
+  bugfix/transform-v8-spread-parameters-in-optional-chaining { samsung }
   transform-modules-commonjs
   proposal-dynamic-import
 

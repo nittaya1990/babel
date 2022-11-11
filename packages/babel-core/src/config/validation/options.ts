@@ -1,7 +1,7 @@
 import type { InputTargets, Targets } from "@babel/helper-compilation-targets";
 
 import type { ConfigItem } from "../item";
-import Plugin from "../plugin";
+import type Plugin from "../plugin";
 
 import removed from "./removed";
 import {
@@ -28,6 +28,9 @@ import {
 } from "./option-assertions";
 import type { ValidatorSet, Validator, OptionPath } from "./option-assertions";
 import type { UnloadedDescriptor } from "../config-descriptors";
+import type { ParserOptions } from "@babel/parser";
+import type { GeneratorOptions } from "@babel/generator";
+import ConfigError from "../../errors/config-error";
 
 const ROOT_VALIDATORS: ValidatorSet = {
   cwd: assertString as Validator<ValidatedOptions["cwd"]>,
@@ -181,9 +184,9 @@ export type ValidatedOptions = {
   sourceFileName?: string;
   sourceRoot?: string;
   // Deprecate top level parserOpts
-  parserOpts?: {};
+  parserOpts?: ParserOptions;
   // Deprecate top level generatorOpts
-  generatorOpts?: {};
+  generatorOpts?: GeneratorOptions;
 };
 
 export type NormalizedOptions = {
@@ -198,7 +201,13 @@ export type CallerMetadata = {
 export type EnvSet<T> = {
   [x: string]: T;
 };
-export type IgnoreItem = string | Function | RegExp;
+export type IgnoreItem =
+  | string
+  | RegExp
+  | ((
+      path: string | undefined,
+      context: { dirname: string; caller: CallerMetadata; envName: string },
+    ) => unknown);
 export type IgnoreList = ReadonlyArray<IgnoreItem>;
 
 export type PluginOptions = object | void | false;
@@ -254,7 +263,7 @@ type EnvPath = Readonly<{
 
 export type NestingPath = RootPath | OverridesPath | EnvPath;
 
-export const assumptionsNames = new Set<string>([
+const knownAssumptions = [
   "arrayLikeIsIterable",
   "constantReexports",
   "constantSuper",
@@ -276,23 +285,36 @@ export const assumptionsNames = new Set<string>([
   "setSpreadProperties",
   "skipForOfIteratorClosing",
   "superIsCallableConstructor",
-]);
+] as const;
+export type AssumptionName = typeof knownAssumptions[number];
+export const assumptionsNames = new Set(knownAssumptions);
 
 function getSource(loc: NestingPath): OptionsSource {
   return loc.type === "root" ? loc.source : getSource(loc.parent);
 }
 
-export function validate(type: OptionsSource, opts: {}): ValidatedOptions {
-  return validateNested(
-    {
-      type: "root",
-      source: type,
-    },
-    opts,
-  );
+export function validate(
+  type: OptionsSource,
+  opts: {},
+  filename?: string,
+): ValidatedOptions {
+  try {
+    return validateNested(
+      {
+        type: "root",
+        source: type,
+      },
+      opts,
+    );
+  } catch (error) {
+    const configError = new ConfigError(error.message, filename);
+    // @ts-expect-error TODO: .code is not defined on ConfigError or Error
+    if (error.code) configError.code = error.code;
+    throw configError;
+  }
 }
 
-function validateNested(loc: NestingPath, opts: {}) {
+function validateNested(loc: NestingPath, opts: { [key: string]: unknown }) {
   const type = getSource(loc);
 
   assertNoDuplicateSourcemap(opts);
@@ -434,8 +456,7 @@ function assertOverridesList(
       validateNested(overridesLoc, env);
     }
   }
-  // @ts-expect-error
-  return arr;
+  return arr as OverridesList;
 }
 
 export function checkNoUnwrappedItemOptionPairs(

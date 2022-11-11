@@ -3,6 +3,7 @@ import type NodePath from "../path";
 import traverse from "../index";
 import type { TraverseOptions } from "../index";
 import Binding from "./binding";
+import type { BindingKind } from "./binding";
 import globals from "globals";
 import {
   NOT_LOCAL_BINDING,
@@ -25,9 +26,11 @@ import {
   isMethod,
   isModuleDeclaration,
   isModuleSpecifier,
+  isNullLiteral,
   isObjectExpression,
   isProperty,
   isPureish,
+  isRegExpLiteral,
   isSuper,
   isTaggedTemplateExpression,
   isTemplateLiteral,
@@ -41,13 +44,20 @@ import {
   unaryExpression,
   variableDeclaration,
   variableDeclarator,
+  isRecordExpression,
+  isTupleExpression,
+  isObjectProperty,
+  isTopicReference,
+  isMetaProperty,
+  isPrivateName,
 } from "@babel/types";
 import type * as t from "@babel/types";
 import { scope as scopeCache } from "../cache";
 import type { Visitor } from "../types";
 
+type NodePart = string | number | boolean;
 // Recursively gathers the identifying names of a node.
-function gatherNodeParts(node: t.Node, parts: any[]) {
+function gatherNodeParts(node: t.Node, parts: NodePart[]) {
   switch (node?.type) {
     default:
       if (isModuleDeclaration(node)) {
@@ -82,14 +92,12 @@ function gatherNodeParts(node: t.Node, parts: any[]) {
         //    allowing only nodes with `.local`?
         // @ts-expect-error todo(flow->ts)
         gatherNodeParts(node.local, parts);
-      } else if (isLiteral(node)) {
-        // todo(flow->ts): should condition be stricter to ensure value is there
-        //   ```
-        //   !t.isNullLiteral(node) &&
-        //   !t.isRegExpLiteral(node) &&
-        //   !isTemplateLiteral(node)
-        //   ```
-        // @ts-expect-error todo(flow->ts)
+      } else if (
+        isLiteral(node) &&
+        !isNullLiteral(node) &&
+        !isRegExpLiteral(node) &&
+        !isTemplateLiteral(node)
+      ) {
         parts.push(node.value);
       }
       break;
@@ -197,7 +205,7 @@ function gatherNodeParts(node: t.Node, parts: any[]) {
       break;
 
     case "JSXOpeningElement":
-      parts.push(node.name);
+      gatherNodeParts(node.name, parts);
       break;
 
     case "JSXFragment":
@@ -335,22 +343,30 @@ const collectorVisitor: Visitor<CollectVisitorState> = {
   },
 
   Function(path) {
-    if (
-      path.isFunctionExpression() &&
-      path.has("id") &&
-      !path.get("id").node[NOT_LOCAL_BINDING]
-    ) {
-      path.scope.registerBinding("local", path.get("id"), path);
-    }
-
     const params: Array<NodePath> = path.get("params");
     for (const param of params) {
       path.scope.registerBinding("param", param);
     }
+
+    // Register function expression id after params. When the id
+    // collides with a function param, the id effectively can't be
+    // referenced: here we registered it as a constantViolation
+    if (
+      path.isFunctionExpression() &&
+      path.has("id") &&
+      // @ts-expect-error Fixme: document symbol ast properties
+      !path.get("id").node[NOT_LOCAL_BINDING]
+    ) {
+      path.scope.registerBinding("local", path.get("id"), path);
+    }
   },
 
   ClassExpression(path) {
-    if (path.has("id") && !path.get("id").node[NOT_LOCAL_BINDING]) {
+    if (
+      path.has("id") &&
+      // @ts-expect-error Fixme: document symbol ast properties
+      !path.get("id").node[NOT_LOCAL_BINDING]
+    ) {
       path.scope.registerBinding("local", path);
     }
   },
@@ -364,23 +380,23 @@ export default class Scope {
   uid;
 
   path: NodePath;
-  block: t.Node;
+  block: t.Pattern | t.Scopable;
 
   labels;
   inited;
 
   bindings: { [name: string]: Binding };
-  references: object;
-  globals: object;
-  uids: object;
-  data: object;
+  references: { [name: string]: true };
+  globals: { [name: string]: t.Identifier | t.JSXIdentifier };
+  uids: { [name: string]: boolean };
+  data: { [key: string | symbol]: unknown };
   crawling: boolean;
 
   /**
    * This searches the current "scope" and collects all references/bindings
    * within.
    */
-  constructor(path: NodePath) {
+  constructor(path: NodePath<t.Pattern | t.Scopable>) {
     const { node } = path;
     const cached = scopeCache.get(node);
     // Sometimes, a scopable path is placed higher in the AST tree.
@@ -415,10 +431,10 @@ export default class Scope {
     let parent,
       path = this.path;
     do {
-      // Skip method scope if coming from inside computed key
-      const isKey = path.key === "key";
+      // Skip method scope if coming from inside computed key or decorator expression
+      const shouldSkip = path.key === "key" || path.listKey === "decorators";
       path = path.parentPath;
-      if (isKey && path.isMethod()) path = path.parentPath;
+      if (shouldSkip && path.isMethod()) path = path.parentPath;
       if (path && path.isScope()) parent = path;
     } while (path && !parent);
 
@@ -442,7 +458,7 @@ export default class Scope {
   /**
    * Traverse node with current scope and path.
    */
-  traverse(node: any, opts: any, state?) {
+  traverse<S>(node: any, opts: any, state?: S) {
     traverse(node, opts, this, state, this.path);
   }
 
@@ -496,14 +512,14 @@ export default class Scope {
    * Generate an `_id1`.
    */
 
-  _generateUid(name, i) {
+  _generateUid(name: string, i: number) {
     let id = name;
     if (i > 1) id += i;
     return `_${id}`;
   }
 
   generateUidBasedOnNode(node: t.Node, defaultName?: string) {
-    const parts = [];
+    const parts: NodePart[] = [];
     gatherNodeParts(node, parts);
 
     let id = parts.join("$");
@@ -531,7 +547,7 @@ export default class Scope {
    */
 
   isStatic(node: t.Node): boolean {
-    if (isThisExpression(node) || isSuper(node)) {
+    if (isThisExpression(node) || isSuper(node) || isTopicReference(node)) {
       return true;
     }
 
@@ -566,7 +582,7 @@ export default class Scope {
 
   checkBlockScopedCollisions(
     local: Binding,
-    kind: string,
+    kind: BindingKind,
     name: string,
     id: any,
   ) {
@@ -584,7 +600,7 @@ export default class Scope {
       local.kind === "const" ||
       local.kind === "module" ||
       // don't allow a local of param with a kind of let
-      (local.kind === "param" && (kind === "let" || kind === "const"));
+      (local.kind === "param" && kind === "const");
 
     if (duplicate) {
       throw this.hub.buildError(
@@ -595,7 +611,7 @@ export default class Scope {
     }
   }
 
-  rename(oldName: string, newName?: string, block?: t.Node) {
+  rename(oldName: string, newName?: string, block?: t.Pattern | t.Scopable) {
     const binding = this.getBinding(oldName);
     if (binding) {
       newName = newName || this.generateUidIdentifier(oldName).name;
@@ -603,7 +619,13 @@ export default class Scope {
     }
   }
 
-  _renameFromMap(map, oldName, newName, value) {
+  /** @deprecated Not used in our codebase */
+  _renameFromMap(
+    map: Record<string | symbol, unknown>,
+    oldName: string | symbol,
+    newName: string | symbol,
+    value: unknown,
+  ) {
     if (map[oldName]) {
       map[newName] = value;
       map[oldName] = null;
@@ -630,7 +652,11 @@ export default class Scope {
   }
 
   // TODO: (Babel 8) Split i in two parameters, and use an object of flags
-  toArray(node: t.Node, i?: number | boolean, arrayLikeIsIterable?: boolean) {
+  toArray(
+    node: t.Node,
+    i?: number | boolean,
+    arrayLikeIsIterable?: boolean | void,
+  ) {
     if (isIdentifier(node)) {
       const binding = this.getBinding(node.name);
       if (binding?.constant && binding.path.isGenericType("Array")) {
@@ -699,10 +725,12 @@ export default class Scope {
       this.registerBinding("hoisted", path.get("id"), path);
     } else if (path.isVariableDeclaration()) {
       const declarations = path.get("declarations");
+      const { kind } = path.node;
       for (const declar of declarations) {
-        this.registerBinding(path.node.kind, declar);
+        this.registerBinding(kind === "using" ? "const" : kind, declar);
       }
     } else if (path.isClassDeclaration()) {
+      if (path.node.declare) return;
       this.registerBinding("let", path);
     } else if (path.isImportDeclaration()) {
       const specifiers = path.get("specifiers");
@@ -783,8 +811,7 @@ export default class Scope {
     }
   }
 
-  // todo: flow->ts maybe add more specific type
-  addGlobal(node: Extract<t.Node, { name: string }>) {
+  addGlobal(node: t.Identifier | t.JSXIdentifier) {
     this.globals[node.name] = node;
   }
 
@@ -812,14 +839,24 @@ export default class Scope {
     return !!this.getProgramParent().references[name];
   }
 
-  isPure(node: t.Node, constantsOnly?: boolean) {
+  isPure(node: t.Node, constantsOnly?: boolean): boolean {
     if (isIdentifier(node)) {
       const binding = this.getBinding(node.name);
       if (!binding) return false;
       if (constantsOnly) return binding.constant;
       return true;
+    } else if (
+      isThisExpression(node) ||
+      isMetaProperty(node) ||
+      isTopicReference(node) ||
+      isPrivateName(node)
+    ) {
+      return true;
     } else if (isClass(node)) {
       if (node.superClass && !this.isPure(node.superClass, constantsOnly)) {
+        return false;
+      }
+      if (node.decorators?.length > 0) {
         return false;
       }
       return this.isPure(node.body, constantsOnly);
@@ -833,24 +870,34 @@ export default class Scope {
         this.isPure(node.left, constantsOnly) &&
         this.isPure(node.right, constantsOnly)
       );
-    } else if (isArrayExpression(node)) {
+    } else if (isArrayExpression(node) || isTupleExpression(node)) {
       for (const elem of node.elements) {
-        if (!this.isPure(elem, constantsOnly)) return false;
+        if (elem !== null && !this.isPure(elem, constantsOnly)) return false;
       }
       return true;
-    } else if (isObjectExpression(node)) {
+    } else if (isObjectExpression(node) || isRecordExpression(node)) {
       for (const prop of node.properties) {
         if (!this.isPure(prop, constantsOnly)) return false;
       }
       return true;
     } else if (isMethod(node)) {
       if (node.computed && !this.isPure(node.key, constantsOnly)) return false;
-      if (node.kind === "get" || node.kind === "set") return false;
+      if (node.decorators?.length > 0) {
+        return false;
+      }
       return true;
     } else if (isProperty(node)) {
       // @ts-expect-error todo(flow->ts): computed in not present on private properties
       if (node.computed && !this.isPure(node.key, constantsOnly)) return false;
-      return this.isPure(node.value, constantsOnly);
+      if (node.decorators?.length > 0) {
+        return false;
+      }
+      if (isObjectProperty(node) || node.static) {
+        if (node.value !== null && !this.isPure(node.value, constantsOnly)) {
+          return false;
+        }
+      }
+      return true;
     } else if (isUnaryExpression(node)) {
       return this.isPure(node.argument, constantsOnly);
     } else if (isTaggedTemplateExpression(node)) {
@@ -980,11 +1027,13 @@ export default class Scope {
     init?: t.Expression;
     unique?: boolean;
     _blockHoist?: number | undefined;
-    kind?: "var" | "let";
+    kind?: "var" | "let" | "const";
   }) {
     let path = this.path;
 
-    if (!path.isBlockStatement() && !path.isProgram()) {
+    if (path.isPattern()) {
+      path = this.getPatternParent().path;
+    } else if (!path.isBlockStatement() && !path.isProgram()) {
       path = this.getBlockParent().path;
     }
 
@@ -993,6 +1042,7 @@ export default class Scope {
     }
 
     if (path.isLoop() || path.isCatchClause() || path.isFunction()) {
+      // @ts-expect-error TS can not infer NodePath<Loop> | NodePath<CatchClause> as NodePath<Loop | CatchClause>
       path.ensureBlock();
       // @ts-expect-error todo(flow->ts): improve types
       path = path.get("body");
@@ -1010,13 +1060,16 @@ export default class Scope {
       // @ts-expect-error todo(flow->ts): avoid modifying nodes
       declar._blockHoist = blockHoist;
 
-      [declarPath] = path.unshiftContainer("body", [declar]);
+      [declarPath] = (path as NodePath<t.BlockStatement>).unshiftContainer(
+        "body",
+        [declar],
+      );
       if (!unique) path.setData(dataKey, declarPath);
     }
 
     const declarator = variableDeclarator(opts.id, opts.init);
-    declarPath.node.declarations.push(declarator);
-    this.registerBinding(kind, declarPath.get("declarations").pop());
+    const len = declarPath.node.declarations.push(declarator);
+    path.scope.registerBinding(kind, declarPath.get("declarations")[len - 1]);
   }
 
   /**
@@ -1065,6 +1118,23 @@ export default class Scope {
   }
 
   /**
+   * Walk up from a pattern scope (function param initializer) until we hit a non-pattern scope,
+   * then returns its block parent
+   * @returns An ancestry scope whose path is a block parent
+   */
+  getPatternParent() {
+    let scope: Scope = this;
+    do {
+      if (!scope.path.isPattern()) {
+        return scope.getBlockParent();
+      }
+    } while ((scope = scope.parent.parent));
+    throw new Error(
+      "We couldn't find a BlockStatement, For, Switch, Function, Loop or Program...",
+    );
+  }
+
+  /**
    * Walks the scope tree and gathers **all** bindings.
    */
 
@@ -1088,7 +1158,7 @@ export default class Scope {
    * Walks the scope tree and gathers all declarations of `kind`.
    */
 
-  getAllBindingsOfKind(...kinds: string[]): any {
+  getAllBindingsOfKind(...kinds: string[]): Record<string, Binding> {
     const ids = Object.create(null);
 
     for (const kind of kinds) {
@@ -1122,13 +1192,25 @@ export default class Scope {
         // That is, if a scope path is pattern, its parent must be Function/CatchClause
 
         // Spec 9.2.10.28: The closure created by this expression should not have visibility of
-        // declarations in the function body. If the binding is not a `param`-kind,
+        // declarations in the function body. If the binding is not a `param`-kind (as function parameters)
+        // or `local`-kind (as id in function expression),
         // then it must be defined inside the function body, thus it should be skipped
-        if (previousPath?.isPattern() && binding.kind !== "param") {
+        if (
+          previousPath?.isPattern() &&
+          binding.kind !== "param" &&
+          binding.kind !== "local"
+        ) {
           // do nothing
         } else {
           return binding;
         }
+      } else if (
+        !binding &&
+        name === "arguments" &&
+        scope.path.isFunction() &&
+        !scope.path.isArrowFunctionExpression()
+      ) {
+        break;
       }
       previousPath = scope.path;
     } while ((scope = scope.parent));
@@ -1153,7 +1235,7 @@ export default class Scope {
     return !!this.getOwnBinding(name);
   }
 
-  hasBinding(name: string, noGlobals?) {
+  hasBinding(name: string, noGlobals?: boolean) {
     if (!name) return false;
     if (this.hasOwnBinding(name)) return true;
     if (this.parentHasBinding(name, noGlobals)) return true;
@@ -1163,7 +1245,7 @@ export default class Scope {
     return false;
   }
 
-  parentHasBinding(name: string, noGlobals?) {
+  parentHasBinding(name: string, noGlobals?: boolean) {
     return this.parent?.hasBinding(name, noGlobals);
   }
 

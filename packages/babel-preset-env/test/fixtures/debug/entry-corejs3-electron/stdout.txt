@@ -8,13 +8,14 @@ Using targets:
 Using modules transform: auto
 
 Using plugins:
+  proposal-class-static-block { electron < 15.0 }
   proposal-private-property-in-object { electron < 13.0 }
-  proposal-class-properties { electron < 10.0 }
+  proposal-class-properties { electron < 6.0 }
   proposal-private-methods { electron < 10.0 }
   proposal-numeric-separator { electron < 6.0 }
   proposal-logical-assignment-operators { electron < 10.0 }
   proposal-nullish-coalescing-operator { electron < 8.0 }
-  proposal-optional-chaining { electron }
+  proposal-optional-chaining { electron < 8.0 }
   proposal-json-strings { electron < 3.0 }
   proposal-optional-catch-binding { electron < 3.0 }
   transform-parameters { electron < 0.37 }
@@ -131,9 +132,12 @@ The corejs3 polyfill entry has been replaced with the following polyfills:
   es.typed-array.uint8-clamped-array { "electron":"0.36" }
   es.typed-array.uint16-array { "electron":"0.36" }
   es.typed-array.uint32-array { "electron":"0.36" }
+  es.typed-array.fill { "electron":"0.36" }
   es.typed-array.from { "electron":"0.36" }
   es.typed-array.includes { "electron":"0.36" }
+  es.typed-array.iterator { "electron":"0.36" }
   es.typed-array.of { "electron":"0.36" }
+  es.typed-array.set { "electron":"0.36" }
   es.typed-array.sort { "electron":"0.36" }
   es.typed-array.to-string { "electron":"0.36" }
   es.weak-map { "electron":"0.36" }

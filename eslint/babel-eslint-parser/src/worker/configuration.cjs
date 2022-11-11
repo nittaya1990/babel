@@ -1,4 +1,5 @@
 const babel = require("./babel-core.cjs");
+const ESLINT_VERSION = require("../utils/eslint-version.cjs");
 
 /**
  * Merge user supplied estree plugin options to default estree plugin options
@@ -8,8 +9,7 @@ const babel = require("./babel-core.cjs");
  */
 function getParserPlugins(babelOptions) {
   const babelParserPlugins = babelOptions.parserOpts?.plugins ?? [];
-  // todo: enable classFeatures when it is supported by ESLint
-  const estreeOptions = { classFeatures: false };
+  const estreeOptions = { classFeatures: ESLINT_VERSION >= 8 };
   for (const plugin of babelParserPlugins) {
     if (Array.isArray(plugin) && plugin[0] === "estree") {
       Object.assign(estreeOptions, plugin[1]);
@@ -26,9 +26,16 @@ function normalizeParserOptions(options) {
     filename: options.filePath,
     ...options.babelOptions,
     parserOpts: {
-      allowImportExportEverywhere: options.allowImportExportEverywhere,
-      allowReturnOutsideFunction: true,
-      allowSuperOutsideMethod: true,
+      ...(process.env.BABEL_8_BREAKING
+        ? {}
+        : {
+            allowImportExportEverywhere:
+              options.allowImportExportEverywhere ?? false,
+            allowSuperOutsideMethod: true,
+          }),
+      allowReturnOutsideFunction:
+        options.ecmaFeatures?.globalReturn ??
+        (process.env.BABEL_8_BREAKING ? false : true),
       ...options.babelOptions.parserOpts,
       plugins: getParserPlugins(options.babelOptions),
       // skip comment attaching for parsing performance

@@ -27,15 +27,36 @@ import normalizeModuleAndLoadMetadata, {
   validateImportInteropOption,
 } from "./normalize-and-load-metadata";
 import type {
+  ImportInterop,
   InteropType,
+  Lazy,
   ModuleMetadata,
   SourceModuleMetadata,
 } from "./normalize-and-load-metadata";
 import type { NodePath } from "@babel/traverse";
 
+export { getDynamicImportSource } from "./dynamic-import";
+
 export { default as getModuleName } from "./get-module-name";
+export type { PluginOptions } from "./get-module-name";
 
 export { hasExports, isSideEffectImport, isModule, rewriteThis };
+
+export interface RewriteModuleStatementsAndPrepareHeaderOptions {
+  exportName?: string;
+  strict: boolean;
+  allowTopLevelThis?: boolean;
+  strictMode: boolean;
+  loose?: boolean;
+  importInterop?: ImportInterop;
+  noInterop?: boolean;
+  lazy?: Lazy;
+  esNamespaceOnly?: boolean;
+  filename: string | undefined;
+  constantReexports?: boolean | void;
+  enumerableModuleMeta?: boolean | void;
+  noIncompleteNsImportDetection?: boolean | void;
+}
 
 /**
  * Perform all of the generic ES6 module rewriting needed to handle initial
@@ -57,24 +78,12 @@ export function rewriteModuleStatementsAndPrepareHeader(
     importInterop = noInterop ? "none" : "babel",
     lazy,
     esNamespaceOnly,
+    filename,
 
     constantReexports = loose,
     enumerableModuleMeta = loose,
     noIncompleteNsImportDetection,
-  }: {
-    exportName?;
-    strict;
-    allowTopLevelThis?;
-    strictMode;
-    loose?;
-    importInterop?: "none" | "babel" | "node";
-    noInterop?;
-    lazy?;
-    esNamespaceOnly?;
-    constantReexports?;
-    enumerableModuleMeta?;
-    noIncompleteNsImportDetection?: boolean;
-  },
+  }: RewriteModuleStatementsAndPrepareHeaderOptions,
 ) {
   validateImportInteropOption(importInterop);
   assert(isModule(path), "Cannot process module statements in a script");
@@ -85,6 +94,7 @@ export function rewriteModuleStatementsAndPrepareHeader(
     initializeReexports: constantReexports,
     lazy,
     esNamespaceOnly,
+    filename,
   });
 
   if (!allowTopLevelThis) {
@@ -134,9 +144,10 @@ export function rewriteModuleStatementsAndPrepareHeader(
  * Flag a set of statements as hoisted above all else so that module init
  * statements all run before user code.
  */
-export function ensureStatementsHoisted(statements) {
+export function ensureStatementsHoisted(statements: t.Statement[]) {
   // Force all of the header fields to be at the top of the file.
   statements.forEach(header => {
+    // @ts-expect-error Fixme: handle _blockHoist property
     header._blockHoist = 3;
   });
 }
@@ -184,7 +195,7 @@ export function wrapInterop(
 export function buildNamespaceInitStatements(
   metadata: ModuleMetadata,
   sourceMetadata: SourceModuleMetadata,
-  constantReexports: boolean = false,
+  constantReexports: boolean | void = false,
 ) {
   const statements = [];
 
@@ -251,11 +262,11 @@ const ReexportTemplate = {
     `,
 };
 
-const buildReexportsFromMeta = (
+function buildReexportsFromMeta(
   meta: ModuleMetadata,
   metadata: SourceModuleMetadata,
   constantReexports: boolean,
-) => {
+) {
   const namespace = metadata.lazy
     ? callExpression(identifier(metadata.name), [])
     : identifier(metadata.name);
@@ -292,14 +303,14 @@ const buildReexportsFromMeta = (
       return ReexportTemplate.spec(astNodes);
     }
   });
-};
+}
 
 /**
  * Build an "__esModule" header statement setting the property on a given object.
  */
 function buildESModuleHeader(
   metadata: ModuleMetadata,
-  enumerableModuleMeta: boolean = false,
+  enumerableModuleMeta: boolean | void = false,
 ) {
   return (
     enumerableModuleMeta
@@ -317,7 +328,11 @@ function buildESModuleHeader(
 /**
  * Create a re-export initialization loop for a specific imported namespace.
  */
-function buildNamespaceReexport(metadata, namespace, constantReexports) {
+function buildNamespaceReexport(
+  metadata: ModuleMetadata,
+  namespace: t.Identifier | t.CallExpression,
+  constantReexports: boolean | void,
+) {
   return (
     constantReexports
       ? template.statement`
@@ -409,8 +424,8 @@ function buildExportNameListDeclaration(
 function buildExportInitializationStatements(
   programPath: NodePath,
   metadata: ModuleMetadata,
-  constantReexports: boolean = false,
-  noIncompleteNsImportDetection = false,
+  constantReexports: boolean | void = false,
+  noIncompleteNsImportDetection: boolean | void = false,
 ) {
   const initStatements: Array<[string, t.Statement | null]> = [];
 
@@ -449,7 +464,11 @@ function buildExportInitializationStatements(
   // https://tc39.es/ecma262/#sec-module-namespace-exotic-objects
   // The [Exports] list is ordered as if an Array of those String values
   // had been sorted using %Array.prototype.sort% using undefined as comparefn
-  initStatements.sort((a, b) => (a[0] > b[0] ? 1 : -1));
+  initStatements.sort(([a], [b]) => {
+    if (a < b) return -1;
+    if (b < a) return 1;
+    return 0;
+  });
 
   const results = [];
   if (noIncompleteNsImportDetection) {
@@ -460,11 +479,8 @@ function buildExportInitializationStatements(
     // We generate init statements (`exports.a = exports.b = ... = void 0`)
     // for every 100 exported names to avoid deeply-nested AST structures.
     const chunkSize = 100;
-    for (
-      let i = 0, uninitializedExportNames = [];
-      i < initStatements.length;
-      i += chunkSize
-    ) {
+    for (let i = 0; i < initStatements.length; i += chunkSize) {
+      let uninitializedExportNames = [];
       for (let j = 0; j < chunkSize && i + j < initStatements.length; j++) {
         const [exportName, initStatement] = initStatements[i + j];
         if (initStatement !== null) {
@@ -509,7 +525,11 @@ const InitTemplate = {
   default: template.expression`EXPORTS.NAME = VALUE`,
 };
 
-function buildInitStatement(metadata: ModuleMetadata, exportNames, initExpr) {
+function buildInitStatement(
+  metadata: ModuleMetadata,
+  exportNames: string[],
+  initExpr: t.Expression,
+) {
   const { stringSpecifiers, exportName: EXPORTS } = metadata;
   return expressionStatement(
     exportNames.reduce((acc, exportName) => {

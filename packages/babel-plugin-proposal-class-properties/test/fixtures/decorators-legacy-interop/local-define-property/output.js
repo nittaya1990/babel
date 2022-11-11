@@ -1,18 +1,16 @@
 var _class, _descriptor, _descriptor2;
+function dec() {}
 
-function dec() {} // Create a local function binding so babel has to change the name of the helper
-
-
+// Create a local function binding so babel has to change the name of the helper
 function _defineProperty() {}
-
-let A = (_class = function A() {
+let A = (_class = /*#__PURE__*/babelHelpers.createClass(function A() {
   "use strict";
 
   babelHelpers.classCallCheck(this, A);
   babelHelpers.initializerDefineProperty(this, "a", _descriptor, this);
   babelHelpers.initializerDefineProperty(this, "b", _descriptor2, this);
   babelHelpers.defineProperty(this, "c", 456);
-}, (_descriptor = babelHelpers.applyDecoratedDescriptor(_class.prototype, "a", [dec], {
+}), (_descriptor = babelHelpers.applyDecoratedDescriptor(_class.prototype, "a", [dec], {
   configurable: true,
   enumerable: true,
   writable: true,

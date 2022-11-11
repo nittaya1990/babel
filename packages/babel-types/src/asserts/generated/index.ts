@@ -506,6 +506,12 @@ export function assertClassProperty(
 ): asserts node is t.ClassProperty {
   assert("ClassProperty", node, opts);
 }
+export function assertClassAccessorProperty(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.ClassAccessorProperty {
+  assert("ClassAccessorProperty", node, opts);
+}
 export function assertClassPrivateProperty(
   node: object | null | undefined,
   opts?: object | null,
@@ -523,6 +529,12 @@ export function assertPrivateName(
   opts?: object | null,
 ): asserts node is t.PrivateName {
   assert("PrivateName", node, opts);
+}
+export function assertStaticBlock(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.StaticBlock {
+  assert("StaticBlock", node, opts);
 }
 export function assertAnyTypeAnnotation(
   node: object | null | undefined,
@@ -1076,12 +1088,6 @@ export function assertDecimalLiteral(
 ): asserts node is t.DecimalLiteral {
   assert("DecimalLiteral", node, opts);
 }
-export function assertStaticBlock(
-  node: object | null | undefined,
-  opts?: object | null,
-): asserts node is t.StaticBlock {
-  assert("StaticBlock", node, opts);
-}
 export function assertModuleExpression(
   node: object | null | undefined,
   opts?: object | null,
@@ -1394,11 +1400,23 @@ export function assertTSTypeAliasDeclaration(
 ): asserts node is t.TSTypeAliasDeclaration {
   assert("TSTypeAliasDeclaration", node, opts);
 }
+export function assertTSInstantiationExpression(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.TSInstantiationExpression {
+  assert("TSInstantiationExpression", node, opts);
+}
 export function assertTSAsExpression(
   node: object | null | undefined,
   opts?: object | null,
 ): asserts node is t.TSAsExpression {
   assert("TSAsExpression", node, opts);
+}
+export function assertTSSatisfiesExpression(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.TSSatisfiesExpression {
+  assert("TSSatisfiesExpression", node, opts);
 }
 export function assertTSTypeAssertion(
   node: object | null | undefined,
@@ -1489,6 +1507,12 @@ export function assertTSTypeParameter(
   opts?: object | null,
 ): asserts node is t.TSTypeParameter {
   assert("TSTypeParameter", node, opts);
+}
+export function assertStandardized(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.Standardized {
+  assert("Standardized", node, opts);
 }
 export function assertExpression(
   node: object | null | undefined,
@@ -1688,6 +1712,12 @@ export function assertModuleSpecifier(
 ): asserts node is t.ModuleSpecifier {
   assert("ModuleSpecifier", node, opts);
 }
+export function assertAccessor(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.Accessor {
+  assert("Accessor", node, opts);
+}
 export function assertPrivate(
   node: object | null | undefined,
   opts?: object | null,
@@ -1741,6 +1771,18 @@ export function assertJSX(
   opts?: object | null,
 ): asserts node is t.JSX {
   assert("JSX", node, opts);
+}
+export function assertMiscellaneous(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.Miscellaneous {
+  assert("Miscellaneous", node, opts);
+}
+export function assertTypeScript(
+  node: object | null | undefined,
+  opts?: object | null,
+): asserts node is t.TypeScript {
+  assert("TypeScript", node, opts);
 }
 export function assertTSTypeElement(
   node: object | null | undefined,

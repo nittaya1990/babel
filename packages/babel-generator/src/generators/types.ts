@@ -4,9 +4,7 @@ import type * as t from "@babel/types";
 import jsesc from "jsesc";
 
 export function Identifier(this: Printer, node: t.Identifier) {
-  this.exactSource(node.loc, () => {
-    this.word(node.name);
-  });
+  this.word(node.name);
 }
 
 export function ArgumentPlaceholder(this: Printer) {
@@ -24,13 +22,14 @@ export function ObjectExpression(this: Printer, node: t.ObjectExpression) {
   const props = node.properties;
 
   this.token("{");
-  this.printInnerComments(node);
 
   if (props.length) {
     this.space();
     this.printList(props, node, { indent: true, statement: true });
     this.space();
   }
+
+  this.sourceWithOffset("end", node.loc, 0, -1);
 
   this.token("}");
 }
@@ -86,7 +85,6 @@ export function ArrayExpression(this: Printer, node: t.ArrayExpression) {
   const len = elems.length;
 
   this.token("[");
-  this.printInnerComments(node);
 
   for (let i = 0; i < elems.length; i++) {
     const elem = elems[i];
@@ -117,19 +115,21 @@ export function RecordExpression(this: Printer, node: t.RecordExpression) {
   if (this.format.recordAndTupleSyntaxType === "bar") {
     startToken = "{|";
     endToken = "|}";
-  } else if (this.format.recordAndTupleSyntaxType === "hash") {
-    startToken = "#{";
-    endToken = "}";
-  } else {
+  } else if (
+    this.format.recordAndTupleSyntaxType !== "hash" &&
+    this.format.recordAndTupleSyntaxType != null
+  ) {
     throw new Error(
       `The "recordAndTupleSyntaxType" generator option must be "bar" or "hash" (${JSON.stringify(
         this.format.recordAndTupleSyntaxType,
       )} received).`,
     );
+  } else {
+    startToken = "#{";
+    endToken = "}";
   }
 
   this.token(startToken);
-  this.printInnerComments(node);
 
   if (props.length) {
     this.space();
@@ -158,7 +158,6 @@ export function TupleExpression(this: Printer, node: t.TupleExpression) {
   }
 
   this.token(startToken);
-  this.printInnerComments(node);
 
   for (let i = 0; i < elems.length; i++) {
     const elem = elems[i];
@@ -201,7 +200,7 @@ export function NumericLiteral(this: Printer, node: t.NumericLiteral) {
 
 export function StringLiteral(this: Printer, node: t.StringLiteral) {
   const raw = this.getPossibleRaw(node);
-  if (!this.format.minified && raw != null) {
+  if (!this.format.minified && raw !== undefined) {
     this.token(raw);
     return;
   }
@@ -221,7 +220,7 @@ export function StringLiteral(this: Printer, node: t.StringLiteral) {
 
 export function BigIntLiteral(this: Printer, node: t.BigIntLiteral) {
   const raw = this.getPossibleRaw(node);
-  if (!this.format.minified && raw != null) {
+  if (!this.format.minified && raw !== undefined) {
     this.word(raw);
     return;
   }
@@ -230,7 +229,7 @@ export function BigIntLiteral(this: Printer, node: t.BigIntLiteral) {
 
 export function DecimalLiteral(this: Printer, node: t.DecimalLiteral) {
   const raw = this.getPossibleRaw(node);
-  if (!this.format.minified && raw != null) {
+  if (!this.format.minified && raw !== undefined) {
     this.word(raw);
     return;
   }
@@ -238,18 +237,19 @@ export function DecimalLiteral(this: Printer, node: t.DecimalLiteral) {
 }
 
 // Hack pipe operator
+const validTopicTokenSet = new Set(["^^", "@@", "^", "%", "#"]);
 export function TopicReference(this: Printer) {
   const { topicToken } = this.format;
-  switch (topicToken) {
-    case "#":
-      this.token("#");
-      break;
 
-    default: {
-      const givenTopicTokenJSON = JSON.stringify(topicToken);
-      const message = `The "topicToken" generator option must be "#" (${givenTopicTokenJSON} received instead).`;
-      throw new Error(message);
-    }
+  if (validTopicTokenSet.has(topicToken)) {
+    this.token(topicToken);
+  } else {
+    const givenTopicTokenJSON = JSON.stringify(topicToken);
+    const validTopics = Array.from(validTopicTokenSet, v => JSON.stringify(v));
+    throw new Error(
+      `The "topicToken" generator option must be one of ` +
+        `${validTopics.join(", ")} (${givenTopicTokenJSON} received instead).`,
+    );
   }
 }
 

@@ -1,5 +1,5 @@
 import * as babel7_12 from "@babel/core";
-import env from "..";
+import env from "../lib/index.js";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -22,7 +22,6 @@ describe("#12880", () => {
 
     expect(out.code).toMatchInlineSnapshot(`
       "Math.pow(a, b);
-
       a => b;"
     `);
   });

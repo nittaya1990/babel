@@ -16,17 +16,16 @@ import {
   logicalExpression,
   memberExpression,
   nullLiteral,
-  numericLiteral,
   optionalCallExpression,
   optionalMemberExpression,
   sequenceExpression,
-  unaryExpression,
+  updateExpression,
 } from "@babel/types";
 import type * as t from "@babel/types";
 import { willPathCastToBoolean } from "./util";
 
 class AssignmentMemoiser {
-  private _map: WeakMap<t.Expression, { count: number; value: t.LVal }>;
+  private _map: WeakMap<t.Expression, { count: number; value: t.Identifier }>;
   constructor() {
     this._map = new WeakMap();
   }
@@ -50,7 +49,7 @@ class AssignmentMemoiser {
     return value;
   }
 
-  set(key: t.Expression, value: t.LVal, count: number) {
+  set(key: t.Expression, value: t.Identifier, count: number) {
     return this._map.set(key, { count, value });
   }
 }
@@ -67,11 +66,12 @@ function toNonOptional(
   if (path.isOptionalCallExpression()) {
     const callee = path.get("callee");
     if (path.node.optional && callee.isOptionalMemberExpression()) {
-      const { object } = callee.node;
-      const context = path.scope.maybeGenerateMemoised(object) || object;
+      // object must be a conditional expression because the optional private access in object has been transformed
+      const object = callee.node.object as t.ConditionalExpression;
+      const context = path.scope.maybeGenerateMemoised(object);
       callee
         .get("object")
-        .replaceWith(assignmentExpression("=", context as t.LVal, object));
+        .replaceWith(assignmentExpression("=", context, object));
 
       return callExpression(memberExpression(base, identifier("call")), [
         context,
@@ -96,7 +96,13 @@ function isInDetachedTree(path: NodePath) {
     const { parentPath, container, listKey } = path;
     const parentNode = parentPath.node;
     if (listKey) {
-      if (container !== parentNode[listKey]) return true;
+      if (
+        container !==
+        // @ts-expect-error listKey must be a valid parent node key
+        parentNode[listKey]
+      ) {
+        return true;
+      }
     } else {
       if (container !== parentNode) return true;
     }
@@ -209,10 +215,12 @@ const handle = {
         );
       }
 
-      const startingProp = startingOptional.isOptionalMemberExpression()
-        ? "object"
-        : "callee";
-      const startingNode = startingOptional.node[startingProp];
+      // @ts-expect-error isOptionalMemberExpression does not work with NodePath union
+      const startingNode = startingOptional.isOptionalMemberExpression()
+        ? // @ts-expect-error isOptionalMemberExpression does not work with NodePath union
+          startingOptional.node.object
+        : // @ts-expect-error isOptionalMemberExpression does not work with NodePath union
+          startingOptional.node.callee;
       const baseNeedsMemoised = scope.maybeGenerateMemoised(startingNode);
       const baseRef = baseNeedsMemoised ?? startingNode;
 
@@ -271,7 +279,12 @@ const handle = {
         const { object } = regular;
         context = member.scope.maybeGenerateMemoised(object);
         if (context) {
-          regular.object = assignmentExpression("=", context, object);
+          regular.object = assignmentExpression(
+            "=",
+            context,
+            // object must not be Super when `context` is an identifier
+            object as t.Expression,
+          );
         }
       }
 
@@ -282,7 +295,12 @@ const handle = {
       }
 
       const baseMemoised = baseNeedsMemoised
-        ? assignmentExpression("=", cloneNode(baseRef), cloneNode(startingNode))
+        ? assignmentExpression(
+            "=",
+            // When base needs memoised, the baseRef must be an identifier
+            cloneNode(baseRef as t.Identifier),
+            cloneNode(startingNode),
+          )
         : cloneNode(baseRef);
 
       if (willEndPathCastToBoolean) {
@@ -350,8 +368,8 @@ const handle = {
       return;
     }
 
-    // MEMBER++   ->   _set(MEMBER, (_ref = (+_get(MEMBER))) + 1), _ref
-    // ++MEMBER   ->   _set(MEMBER, (+_get(MEMBER)) + 1)
+    // MEMBER++   ->   _set(MEMBER, (ref = _get(MEMBER), ref2 = ref++, ref)), ref2
+    // ++MEMBER   ->   _set(MEMBER, (ref = _get(MEMBER), ++ref))
     if (isUpdateExpression(parent, { argument: node })) {
       if (this.simpleSet) {
         member.replaceWith(this.simpleSet(member));
@@ -365,31 +383,43 @@ const handle = {
       // assignment.
       this.memoise(member, 2);
 
-      const value = binaryExpression(
-        operator[0] as "+" | "-",
-        unaryExpression("+", this.get(member)),
-        numericLiteral(1),
-      );
+      const ref = scope.generateUidIdentifierBasedOnNode(node);
+      scope.push({ id: ref });
+
+      const seq: t.Expression[] = [
+        // ref = _get(MEMBER)
+        assignmentExpression("=", cloneNode(ref), this.get(member)),
+      ];
 
       if (prefix) {
+        seq.push(updateExpression(operator, cloneNode(ref), prefix));
+
+        // (ref = _get(MEMBER), ++ref)
+        const value = sequenceExpression(seq);
         parentPath.replaceWith(this.set(member, value));
+
+        return;
       } else {
-        const { scope } = member;
-        const ref = scope.generateUidIdentifierBasedOnNode(node);
-        scope.push({ id: ref });
+        const ref2 = scope.generateUidIdentifierBasedOnNode(node);
+        scope.push({ id: ref2 });
 
-        value.left = assignmentExpression(
-          "=",
+        seq.push(
+          assignmentExpression(
+            "=",
+            cloneNode(ref2),
+            updateExpression(operator, cloneNode(ref), prefix),
+          ),
           cloneNode(ref),
-          // @ts-expect-error todo(flow->ts) value.left is possibly PrivateName, which is not usable here
-          value.left,
         );
 
+        // (ref = _get(MEMBER), ref2 = ref++, ref)
+        const value = sequenceExpression(seq);
         parentPath.replaceWith(
-          sequenceExpression([this.set(member, value), cloneNode(ref)]),
+          sequenceExpression([this.set(member, value), cloneNode(ref2)]),
         );
+
+        return;
       }
-      return;
     }
 
     // MEMBER = VALUE   ->   _set(MEMBER, VALUE)
@@ -538,7 +568,7 @@ export interface HandlerState<State = {}> extends Handler<State> {
   handle(
     this: HandlerState<State> & State,
     member: Member,
-    noDocumentAll: boolean,
+    noDocumentAll?: boolean,
   ): void;
   memoiser: AssignmentMemoiser;
 }

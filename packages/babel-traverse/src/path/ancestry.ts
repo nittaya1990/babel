@@ -2,7 +2,7 @@
 
 import { VISITOR_KEYS } from "@babel/types";
 import type * as t from "@babel/types";
-import NodePath from "./index";
+import type NodePath from "./index";
 
 /**
  * Starting at the parent path of the current `NodePath` and going up the
@@ -12,6 +12,7 @@ import NodePath from "./index";
  */
 
 export function findParent(
+  this: NodePath,
   callback: (path: NodePath) => boolean,
 ): NodePath | null {
   let path = this;
@@ -132,7 +133,7 @@ export function getEarliestCommonAncestorFrom(
 export function getDeepestCommonAncestorFrom(
   this: NodePath,
   paths: Array<NodePath>,
-  filter?: (deepest: t.Node, i: number, ancestries: NodePath[][]) => NodePath,
+  filter?: (deepest: NodePath, i: number, ancestries: NodePath[][]) => NodePath,
 ): NodePath {
   if (!paths.length) {
     return this;

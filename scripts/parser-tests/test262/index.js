@@ -5,18 +5,16 @@ import TestRunner from "../utils/parser-test-runner.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const ignoredFeatures = [
+const ignoredFeatures = new Set([
   "__getter__",
+  "__proto__",
   "__setter__",
   "AggregateError",
-  "Array.prototype.at",
-  "Array.prototype.flat",
-  "Array.prototype.flatMap",
-  "Array.prototype.item",
-  "Array.prototype.values",
   "ArrayBuffer",
   "align-detached-buffer-semantics-with-web-reality",
   "arbitrary-module-namespace-names",
+  "array-find-from-last",
+  "array-grouping",
   "async-functions",
   "async-iteration",
   "arrow-function",
@@ -26,8 +24,10 @@ const ignoredFeatures = [
   "caller",
   "class",
   "class-fields-private",
+  "class-fields-private-in",
   "class-fields-public",
   "class-methods-private",
+  "class-static-block",
   "class-static-fields-private",
   "class-static-fields-public",
   "class-static-methods-private",
@@ -37,18 +37,11 @@ const ignoredFeatures = [
   "const",
   "cross-realm",
   "DataView",
-  "DataView.prototype.getFloat32",
-  "DataView.prototype.getFloat64",
-  "DataView.prototype.getInt8",
-  "DataView.prototype.getInt16",
-  "DataView.prototype.getInt32",
-  "DataView.prototype.getUint16",
-  "DataView.prototype.getUint32",
-  "DataView.prototype.setUint8",
   "default-parameters",
   "destructuring-assignment",
   "destructuring-binding",
   "dynamic-import",
+  "error-cause",
   "export-star-as-namespace-from-module",
   "FinalizationGroup",
   "FinalizationRegistry",
@@ -64,19 +57,11 @@ const ignoredFeatures = [
   "Int8Array",
   "Int16Array",
   "Int32Array",
-  "Intl.DateTimeFormat-datetimestyle",
-  "Intl.DateTimeFormat-dayPeriod",
-  "Intl.DateTimeFormat-fractionalSecondDigits",
-  "Intl.DateTimeFormat-formatRange",
-  "Intl.DisplayNames",
-  "Intl.ListFormat",
-  "Intl.Locale",
-  "Intl.NumberFormat-unified",
-  "Intl.RelativeTimeFormat",
-  "Intl.Segmenter",
+  "Intl-enumeration",
   "IsHTMLDDA",
   "import.meta",
   "intl-normative-optional",
+  "json-modules",
   "json-superset",
   "legacy-regexp",
   "let",
@@ -85,6 +70,7 @@ const ignoredFeatures = [
   "new.target",
   "numeric-separator-literal",
   "Object.fromEntries",
+  "Object.hasOwn",
   "Object.is",
   "object-rest",
   "object-spread",
@@ -104,18 +90,12 @@ const ignoredFeatures = [
   "regexp-lookbehind",
   "regexp-named-groups",
   "regexp-unicode-property-escapes",
+  "resizable-arraybuffer",
   "rest-parameters",
+  "ShadowRealm",
   "SharedArrayBuffer",
   "Set",
   "String.fromCodePoint",
-  "String.prototype.at",
-  "String.prototype.endsWith",
-  "String.prototype.includes",
-  "String.prototype.item",
-  "String.prototype.matchAll",
-  "String.prototype.replaceAll",
-  "String.prototype.trimEnd",
-  "String.prototype.trimStart",
   "string-trimming",
   "super",
   "Symbol",
@@ -136,9 +116,8 @@ const ignoredFeatures = [
   "tail-call-optimization",
   "template",
   "top-level-await",
+  "Temporal",
   "TypedArray",
-  "TypedArray.prototype.at",
-  "TypedArray.prototype.item",
   "u180e",
   "Uint8Array",
   "Uint8ClampedArray",
@@ -148,14 +127,30 @@ const ignoredFeatures = [
   "WeakSet",
   "WeakRef",
   "well-formed-json-stringify",
-];
+]);
+
+function featureShouldIgnore(feature) {
+  return (
+    ignoredFeatures.has(feature) ||
+    // All prototype method must not introduce new language syntax
+    feature.includes(".prototype.") ||
+    // Ignore Intl features
+    feature.startsWith("Intl.")
+  );
+}
 
 const ignoredTests = ["built-ins/RegExp/", "language/literals/regexp/"];
 
-const featuresToPlugins = {
-  "class-static-block": "classStaticBlock",
-  "import-assertions": "importAssertions",
-};
+const featuresToPlugins = new Map([
+  ["import-assertions", "importAssertions"],
+  [
+    "decorators",
+    [
+      ["decorators", { version: "2021-12", decoratorsBeforeExport: false }],
+      "decoratorAutoAccessors",
+    ],
+  ],
+]);
 
 const unmappedFeatures = new Set();
 
@@ -163,16 +158,16 @@ function* getPlugins(features) {
   if (!features) return;
 
   for (const f of features) {
-    if (featuresToPlugins[f]) {
-      yield featuresToPlugins[f];
-    } else if (!ignoredFeatures.includes(f)) {
+    if (featuresToPlugins.has(f)) {
+      yield featuresToPlugins.get(f);
+    } else if (!featureShouldIgnore(f)) {
       unmappedFeatures.add(f);
     }
   }
 }
 
 const runner = new TestRunner({
-  testDir: path.join(dirname, "../../../build/test262"),
+  testDir: path.join(dirname, "../../../build/test262").replace(/\\/g, "/"),
   allowlist: path.join(dirname, "allowlist.txt"),
   logInterval: 500,
   shouldUpdate: process.argv.includes("--update-allowlist"),
@@ -184,7 +179,7 @@ const runner = new TestRunner({
 
     for await (const test of stream) {
       // strip test/
-      const fileName = test.file.substr(5);
+      const fileName = test.file.slice(5).replace(/\\/g, "/");
 
       if (ignoredTests.some(start => fileName.startsWith(start))) continue;
 
@@ -193,7 +188,7 @@ const runner = new TestRunner({
         fileName,
         id: `${fileName}(${test.scenario})`,
         sourceType: test.attrs.flags.module ? "module" : "script",
-        plugins: Array.from(getPlugins(test.attrs.features)),
+        plugins: Array.from(getPlugins(test.attrs.features)).flat(),
         expectedError:
           !!test.attrs.negative &&
           (test.attrs.negative.phase === "parse" ||
@@ -207,13 +202,15 @@ runner
   .run()
   .then(() => {
     if (unmappedFeatures.size) {
-      console.log("");
-      console.log(
+      console.warn("");
+      console.warn(
         "The following Features are not currently mapped or ignored:"
       );
-      console.log(
+      console.warn(
         Array.from(unmappedFeatures).join("\n").replace(/^/gm, "   ")
       );
+
+      process.exitCode = 1;
     }
   })
   .catch(err => {

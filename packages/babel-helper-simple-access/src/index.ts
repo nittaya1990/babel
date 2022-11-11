@@ -9,20 +9,24 @@ import {
   sequenceExpression,
   unaryExpression,
 } from "@babel/types";
-import type { NodePath } from "@babel/traverse";
+import type * as t from "@babel/types";
+import type { NodePath, Scope, Visitor } from "@babel/traverse";
 
-export default function simplifyAccess(path: NodePath, bindingNames) {
-  path.traverse(simpleAssignmentVisitor, {
-    scope: path.scope,
-    bindingNames,
-    seen: new WeakSet(),
-  });
-}
+type State = {
+  scope: Scope;
+  bindingNames: Set<string>;
+  seen: WeakSet<t.Node>;
+  includeUpdateExpression: boolean;
+};
 
-const simpleAssignmentVisitor = {
+const simpleAssignmentVisitor: Visitor<State> = {
+  // TODO(Babel 8): Remove UpdateExpression
   UpdateExpression: {
     exit(path) {
-      const { scope, bindingNames } = this;
+      const { scope, bindingNames, includeUpdateExpression } = this;
+      if (!includeUpdateExpression) {
+        return;
+      }
 
       const arg = path.get("argument");
       if (!arg.isIdentifier()) return;
@@ -51,7 +55,7 @@ const simpleAssignmentVisitor = {
             "=",
             identifier(localName),
             binaryExpression(
-              path.node.operator[0],
+              path.node.operator[0] as "+" | "-",
               unaryExpression("+", arg.node),
               numericLiteral(1),
             ),
@@ -66,8 +70,9 @@ const simpleAssignmentVisitor = {
         path.scope.push({ id: old });
 
         const binary = binaryExpression(
-          path.node.operator[0],
+          path.node.operator[0] as "+" | "-",
           identifier(varName),
+          // todo: support bigint
           numericLiteral(1),
         );
 
@@ -116,6 +121,7 @@ const simpleAssignmentVisitor = {
         // (foo &&= bar) => (foo && foo = bar)
         path.replaceWith(
           logicalExpression(
+            // @ts-expect-error Guarded by LOGICAL_OPERATORS.includes
             operator,
             path.node.left,
             assignmentExpression(
@@ -128,6 +134,8 @@ const simpleAssignmentVisitor = {
       } else {
         // (foo += bar) => (foo = foo + bar)
         path.node.right = binaryExpression(
+          // @ts-expect-error An assignment expression operator removing "=" must
+          // be a valid binary operator
           operator,
           cloneNode(path.node.left),
           path.node.right,
@@ -137,3 +145,17 @@ const simpleAssignmentVisitor = {
     },
   },
 };
+
+export default function simplifyAccess(
+  path: NodePath,
+  bindingNames: Set<string>,
+  // TODO(Babel 8): Remove this
+  includeUpdateExpression: boolean = true,
+) {
+  path.traverse(simpleAssignmentVisitor, {
+    scope: path.scope,
+    bindingNames,
+    seen: new WeakSet(),
+    includeUpdateExpression,
+  });
+}

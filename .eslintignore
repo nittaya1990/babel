@@ -22,6 +22,7 @@ packages/babel-preset-env/test/debug-fixtures
 packages/babel-standalone/babel.js
 packages/babel-standalone/babel.min.js
 packages/babel-parser/test/expressions
+packages/babel-core/src/vendor
 
 eslint/*/lib
 eslint/*/node_modules
@@ -29,3 +30,5 @@ eslint/*/test/fixtures
 
 test/runtime-integration/*/output.js
 test/runtime-integration/*/output-absolute.js
+
+Makefile.js

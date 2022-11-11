@@ -40,7 +40,26 @@ do
   (cd "$d"; node "$bump_deps")
 done
 
+if [[ "$(node --version)" == v17.* ]]; then
+  # Remove this when https://github.com/webpack/webpack/issues/14532 is fixed
+  export NODE_OPTIONS=--openssl-legacy-provider
+fi
+
 startLocalRegistry "$PWD"/../../verdaccio-config.yml
+
+# Remove this when CRA updates jest-worker in their lockfile
+node -e "
+  var pkg = require('./package.json');
+
+  pkg.resolutions = {
+    'jest-worker': '27.4.5'
+  };
+
+  fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2));
+"
+npm install --ignore-scripts
+npx npm-force-resolutions
+
 npm install
 
 # Test

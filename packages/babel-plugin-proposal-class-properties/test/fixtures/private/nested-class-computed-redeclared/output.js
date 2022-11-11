@@ -1,5 +1,4 @@
 var _foo = /*#__PURE__*/new WeakMap();
-
 var Foo = /*#__PURE__*/function () {
   "use strict";
 
@@ -10,17 +9,13 @@ var Foo = /*#__PURE__*/function () {
       value: 1
     });
   }
-
   babelHelpers.createClass(Foo, [{
     key: "test",
     value: function test() {
       var _babelHelpers$classPr;
-
       var _foo2 = /*#__PURE__*/new WeakMap();
-
       _babelHelpers$classPr = babelHelpers.classPrivateFieldGet(this, _foo2);
-
-      var Nested = /*#__PURE__*/function (_babelHelpers$classPr2) {
+      var Nested = /*#__PURE__*/function () {
         function Nested() {
           babelHelpers.classCallCheck(this, Nested);
           babelHelpers.classPrivateFieldInitSpec(this, _foo2, {
@@ -28,14 +23,12 @@ var Foo = /*#__PURE__*/function () {
             value: 2
           });
         }
-
         babelHelpers.createClass(Nested, [{
-          key: _babelHelpers$classPr2,
+          key: _babelHelpers$classPr,
           value: function () {}
         }]);
         return Nested;
-      }(_babelHelpers$classPr);
-
+      }();
       babelHelpers.classPrivateFieldGet(this, _foo);
     }
   }]);

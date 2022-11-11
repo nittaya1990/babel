@@ -54,10 +54,10 @@ export function JSXSpreadChild(this: Printer, node: t.JSXSpreadChild) {
 export function JSXText(this: Printer, node: t.JSXText) {
   const raw = this.getPossibleRaw(node);
 
-  if (raw != null) {
-    this.token(raw);
+  if (raw !== undefined) {
+    this.token(raw, true);
   } else {
-    this.token(node.value);
+    this.token(node.value, true);
   }
 }
 
@@ -67,7 +67,7 @@ export function JSXElement(this: Printer, node: t.JSXElement) {
   if (open.selfClosing) return;
 
   this.indent();
-  for (const child of node.children as Array<any>) {
+  for (const child of node.children) {
     this.print(child, node);
   }
   this.dedent();
@@ -75,7 +75,7 @@ export function JSXElement(this: Printer, node: t.JSXElement) {
   this.print(node.closingElement, node);
 }
 
-function spaceSeparator() {
+function spaceSeparator(this: Printer) {
   this.space();
 }
 
@@ -101,15 +101,16 @@ export function JSXClosingElement(this: Printer, node: t.JSXClosingElement) {
   this.token(">");
 }
 
-export function JSXEmptyExpression(this: Printer, node: t.JSXEmptyExpression) {
-  this.printInnerComments(node);
+export function JSXEmptyExpression(this: Printer) {
+  // This node is empty, so forcefully print its inner comments.
+  this.printInnerComments();
 }
 
 export function JSXFragment(this: Printer, node: t.JSXFragment) {
   this.print(node.openingFragment, node);
 
   this.indent();
-  for (const child of node.children as Array<any>) {
+  for (const child of node.children) {
     this.print(child, node);
   }
   this.dedent();

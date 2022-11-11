@@ -1,11 +1,17 @@
 import { declare } from "@babel/helper-plugin-utils";
 import { skipTransparentExprWrappers } from "@babel/helper-skip-transparent-expression-wrappers";
-import { types as t, File } from "@babel/core";
+import type { File } from "@babel/core";
+import { types as t } from "@babel/core";
 import type { NodePath, Scope } from "@babel/traverse";
 
 type ListElement = t.SpreadElement | t.Expression;
 
-export default declare((api, options) => {
+export interface Options {
+  allowArrayLike?: boolean;
+  loose?: boolean;
+}
+
+export default declare((api, options: Options) => {
   api.assertVersion(7);
 
   const iterableIsArray = api.assumption("iterableIsArray") ?? options.loose;
@@ -84,12 +90,12 @@ export default declare((api, options) => {
     name: "transform-spread",
 
     visitor: {
-      ArrayExpression(path: NodePath<t.ArrayExpression>): void {
+      ArrayExpression(path): void {
         const { node, scope } = path;
         const elements = node.elements;
         if (!hasSpread(elements)) return;
 
-        const nodes = build(elements, scope, this);
+        const nodes = build(elements, scope, this.file);
         let first = nodes[0];
 
         // If there is only one element in the ArrayExpression and
@@ -123,7 +129,7 @@ export default declare((api, options) => {
           ),
         );
       },
-      CallExpression(path: NodePath<t.CallExpression>): void {
+      CallExpression(path): void {
         const { node, scope } = path;
 
         const args = node.arguments as Array<ListElement>;
@@ -138,7 +144,7 @@ export default declare((api, options) => {
               "Please add '@babel/plugin-transform-classes' to your Babel configuration.",
           );
         }
-        let contextLiteral: t.Expression = scope.buildUndefinedNode();
+        let contextLiteral: t.Expression | t.Super = scope.buildUndefinedNode();
         node.arguments = [];
 
         let nodes: t.Expression[];
@@ -150,7 +156,7 @@ export default declare((api, options) => {
         ) {
           nodes = [(args[0] as t.SpreadElement).argument];
         } else {
-          nodes = build(args, scope, this);
+          nodes = build(args, scope, this.file);
         }
 
         const first = nodes.shift();
@@ -167,10 +173,15 @@ export default declare((api, options) => {
 
         const callee = calleePath.node as t.MemberExpression;
 
-        if (calleePath.isMemberExpression()) {
+        if (t.isMemberExpression(callee)) {
           const temp = scope.maybeGenerateMemoised(callee.object);
           if (temp) {
-            callee.object = t.assignmentExpression("=", temp, callee.object);
+            callee.object = t.assignmentExpression(
+              "=",
+              temp,
+              // object must not be Super when `temp` is an identifier
+              callee.object as t.Expression,
+            );
             contextLiteral = temp;
           } else {
             contextLiteral = t.cloneNode(callee.object);
@@ -189,11 +200,15 @@ export default declare((api, options) => {
         node.arguments.unshift(t.cloneNode(contextLiteral));
       },
 
-      NewExpression(path: NodePath<t.NewExpression>): void {
+      NewExpression(path): void {
         const { node, scope } = path;
         if (!hasSpread(node.arguments)) return;
 
-        const nodes = build(node.arguments as Array<ListElement>, scope, this);
+        const nodes = build(
+          node.arguments as Array<ListElement>,
+          scope,
+          this.file,
+        );
 
         const first = nodes.shift();
 

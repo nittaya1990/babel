@@ -1,8 +1,24 @@
 import jsx from "@babel/plugin-syntax-jsx";
 import { declare } from "@babel/helper-plugin-utils";
 import { types as t } from "@babel/core";
+import type { PluginPass } from "@babel/core";
+import type { NodePath, Scope, Visitor } from "@babel/traverse";
 import { addNamed, addNamespace, isModule } from "@babel/helper-module-imports";
 import annotateAsPure from "@babel/helper-annotate-as-pure";
+import type {
+  CallExpression,
+  Class,
+  Expression,
+  Identifier,
+  JSXAttribute,
+  JSXElement,
+  JSXFragment,
+  JSXOpeningElement,
+  JSXSpreadAttribute,
+  MemberExpression,
+  ObjectExpression,
+  Program,
+} from "@babel/types";
 
 const DEFAULT = {
   importSource: "react",
@@ -11,17 +27,46 @@ const DEFAULT = {
   pragmaFrag: "React.Fragment",
 };
 
-const JSX_SOURCE_ANNOTATION_REGEX = /\*?\s*@jsxImportSource\s+([^\s]+)/;
-const JSX_RUNTIME_ANNOTATION_REGEX = /\*?\s*@jsxRuntime\s+([^\s]+)/;
+const JSX_SOURCE_ANNOTATION_REGEX =
+  /^\s*\*?\s*@jsxImportSource\s+([^\s]+)\s*$/m;
+const JSX_RUNTIME_ANNOTATION_REGEX = /^\s*\*?\s*@jsxRuntime\s+([^\s]+)\s*$/m;
 
-const JSX_ANNOTATION_REGEX = /\*?\s*@jsx\s+([^\s]+)/;
-const JSX_FRAG_ANNOTATION_REGEX = /\*?\s*@jsxFrag\s+([^\s]+)/;
+const JSX_ANNOTATION_REGEX = /^\s*\*?\s*@jsx\s+([^\s]+)\s*$/m;
+const JSX_FRAG_ANNOTATION_REGEX = /^\s*\*?\s*@jsxFrag\s+([^\s]+)\s*$/m;
 
-const get = (pass, name) => pass.get(`@babel/plugin-react-jsx/${name}`);
-const set = (pass, name, v) => pass.set(`@babel/plugin-react-jsx/${name}`, v);
+const get = (pass: PluginPass, name: string) =>
+  pass.get(`@babel/plugin-react-jsx/${name}`);
+const set = (pass: PluginPass, name: string, v: any) =>
+  pass.set(`@babel/plugin-react-jsx/${name}`, v);
 
-export default function createPlugin({ name, development }) {
-  return declare((api, options) => {
+function hasProto(node: t.ObjectExpression) {
+  return node.properties.some(
+    value =>
+      t.isObjectProperty(value, { computed: false, shorthand: false }) &&
+      (t.isIdentifier(value.key, { name: "__proto__" }) ||
+        t.isStringLiteral(value.key, { value: "__proto__" })),
+  );
+}
+
+export interface Options {
+  filter?: (node: t.Node, pass: PluginPass) => boolean;
+  importSource?: string;
+  pragma?: string;
+  pragmaFrag?: string;
+  pure?: string;
+  runtime?: "automatic" | "classic";
+  throwIfNamespace?: boolean;
+  useBuiltIns: boolean;
+  useSpread?: boolean;
+}
+export default function createPlugin({
+  name,
+  development,
+}: {
+  name: string;
+  development: boolean;
+}) {
+  return declare((_, options: Options) => {
     const {
       pure: PURE_ANNOTATION,
 
@@ -90,21 +135,10 @@ export default function createPlugin({ name, development }) {
       }
     }
 
-    const injectMetaPropertiesVisitor = {
+    const injectMetaPropertiesVisitor: Visitor<PluginPass> = {
       JSXOpeningElement(path, state) {
-        for (const attr of path.get("attributes")) {
-          if (!attr.isJSXElement()) continue;
-
-          const { name } = attr.node.name;
-          if (name === "__source" || name === "__self") {
-            throw path.buildCodeFrameError(
-              `__source and __self should not be defined in props and are reserved for internal usage.`,
-            );
-          }
-        }
-
         const attributes = [];
-        if (isThisAllowed(path)) {
+        if (isThisAllowed(path.scope)) {
           attributes.push(
             t.jsxAttribute(
               t.jsxIdentifier("__self"),
@@ -144,11 +178,11 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
         Program: {
           enter(path, state) {
             const { file } = state;
-            let runtime = RUNTIME_DEFAULT;
+            let runtime: string = RUNTIME_DEFAULT;
 
-            let source = IMPORT_SOURCE_DEFAULT;
-            let pragma = PRAGMA_DEFAULT;
-            let pragmaFrag = PRAGMA_FRAG_DEFAULT;
+            let source: string = IMPORT_SOURCE_DEFAULT;
+            let pragma: string = PRAGMA_DEFAULT;
+            let pragmaFrag: string = PRAGMA_FRAG_DEFAULT;
 
             let sourceSet = !!options.importSource;
             let pragmaSet = !!options.pragma;
@@ -208,7 +242,7 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
                 );
               }
 
-              const define = (name, id) =>
+              const define = (name: string, id: string) =>
                 set(state, name, createImportLazily(state, path, id, source));
 
               define("id/jsx", development ? "jsxDEV" : "jsx");
@@ -280,53 +314,46 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
             path.node.value = t.jsxExpressionContainer(path.node.value);
           }
         },
-      },
+      } as Visitor<PluginPass>,
     };
 
-    // Finds the closest parent function that provides `this`. Specifically, this looks for
-    // the first parent function that isn't an arrow function.
-    //
-    // Derived from `Scope#getFunctionParent`
-    function getThisFunctionParent(path) {
-      let scope = path.scope;
-      do {
-        if (
-          scope.path.isFunctionParent() &&
-          !scope.path.isArrowFunctionExpression()
-        ) {
-          return scope.path;
-        }
-      } while ((scope = scope.parent));
-      return null;
-    }
-
     // Returns whether the class has specified a superclass.
-    function isDerivedClass(classPath) {
+    function isDerivedClass(classPath: NodePath<Class>) {
       return classPath.node.superClass !== null;
     }
 
-    // Returns whether `this` is allowed at given path.
-    function isThisAllowed(path) {
+    // Returns whether `this` is allowed at given scope.
+    function isThisAllowed(scope: Scope) {
       // This specifically skips arrow functions as they do not rewrite `this`.
-      const parentMethodOrFunction = getThisFunctionParent(path);
-      if (parentMethodOrFunction === null) {
-        // We are not in a method or function. It is fine to use `this`.
-        return true;
-      }
-      if (!parentMethodOrFunction.isMethod()) {
-        // If the closest parent is a regular function, `this` will be rebound, therefore it is fine to use `this`.
-        return true;
-      }
-      // Current node is within a method, so we need to check if the method is a constructor.
-      if (parentMethodOrFunction.node.kind !== "constructor") {
-        // We are not in a constructor, therefore it is always fine to use `this`.
-        return true;
-      }
-      // Now we are in a constructor. If it is a derived class, we do not reference `this`.
-      return !isDerivedClass(parentMethodOrFunction.parentPath.parentPath);
+      do {
+        const { path } = scope;
+        if (path.isFunctionParent() && !path.isArrowFunctionExpression()) {
+          if (!path.isMethod()) {
+            // If the closest parent is a regular function, `this` will be rebound, therefore it is fine to use `this`.
+            return true;
+          }
+          // Current node is within a method, so we need to check if the method is a constructor.
+          if (path.node.kind !== "constructor") {
+            // We are not in a constructor, therefore it is always fine to use `this`.
+            return true;
+          }
+          // Now we are in a constructor. If it is a derived class, we do not reference `this`.
+          return !isDerivedClass(path.parentPath.parentPath as NodePath<Class>);
+        }
+        if (path.isTSModuleBlock()) {
+          // If the closeset parent is a TS Module block, `this` will not be allowed.
+          return false;
+        }
+      } while ((scope = scope.parent));
+      // We are not in a method or function. It is fine to use `this`.
+      return true;
     }
 
-    function call(pass, name, args) {
+    function call(
+      pass: PluginPass,
+      name: string,
+      args: CallExpression["arguments"],
+    ) {
       const node = t.callExpression(get(pass, `id/${name}`)(), args);
       if (PURE_ANNOTATION ?? get(pass, "defaultPure")) annotateAsPure(node);
       return node;
@@ -337,7 +364,7 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
     // from <div key={key} {...props} />. This is an intermediary
     // step while we deprecate key spread from props. Afterwards,
     // we will stop using createElement in the transform.
-    function shouldUseCreateElement(path) {
+    function shouldUseCreateElement(path: NodePath<JSXElement>) {
       const openingPath = path.get("openingElement");
       const attributes = openingPath.node.attributes;
 
@@ -357,13 +384,17 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
       return false;
     }
 
-    function convertJSXIdentifier(node, parent) {
+    function convertJSXIdentifier(
+      node: t.JSXIdentifier | t.JSXMemberExpression | t.JSXNamespacedName,
+      parent: t.JSXOpeningElement | t.JSXMemberExpression,
+    ): t.ThisExpression | t.StringLiteral | t.MemberExpression | t.Identifier {
       if (t.isJSXIdentifier(node)) {
         if (node.name === "this" && t.isReferenced(node, parent)) {
           return t.thisExpression();
         } else if (t.isValidIdentifier(node.name, false)) {
-          // @ts-expect-error todo(flow->ts)
+          // @ts-expect-error cast AST type to Identifier
           node.type = "Identifier";
+          return node as unknown as t.Identifier;
         } else {
           return t.stringLiteral(node.name);
         }
@@ -380,10 +411,13 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
         return t.stringLiteral(`${node.namespace.name}:${node.name.name}`);
       }
 
+      // todo: this branch should be unreachable
       return node;
     }
 
-    function convertAttributeValue(node) {
+    function convertAttributeValue(
+      node: t.JSXAttribute["value"] | t.BooleanLiteral,
+    ) {
       if (t.isJSXExpressionContainer(node)) {
         return node.expression;
       } else {
@@ -391,11 +425,14 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
       }
     }
 
-    function accumulateAttribute(array, attribute) {
+    function accumulateAttribute(
+      array: ObjectExpression["properties"],
+      attribute: NodePath<JSXAttribute | JSXSpreadAttribute>,
+    ) {
       if (t.isJSXSpreadAttribute(attribute.node)) {
         const arg = attribute.node.argument;
         // Collect properties into props array if spreading object expression
-        if (t.isObjectExpression(arg)) {
+        if (t.isObjectExpression(arg) && !hasProto(arg)) {
           array.push(...arg.properties);
         } else {
           array.push(t.spreadElement(arg));
@@ -426,27 +463,34 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
       }
 
       if (t.isJSXNamespacedName(attribute.node.name)) {
+        // @ts-expect-error mutating AST
         attribute.node.name = t.stringLiteral(
           attribute.node.name.namespace.name +
             ":" +
             attribute.node.name.name.name,
         );
       } else if (t.isValidIdentifier(attribute.node.name.name, false)) {
+        // @ts-expect-error mutating AST
         attribute.node.name.type = "Identifier";
       } else {
+        // @ts-expect-error mutating AST
         attribute.node.name = t.stringLiteral(attribute.node.name.name);
       }
 
       array.push(
         t.inherits(
-          t.objectProperty(attribute.node.name, value),
+          t.objectProperty(
+            // @ts-expect-error The attribute.node.name is an Identifier now
+            attribute.node.name,
+            value,
+          ),
           attribute.node,
         ),
       );
       return array;
     }
 
-    function buildChildrenProperty(children) {
+    function buildChildrenProperty(children: Expression[]) {
       let childrenNode;
       if (children.length === 1) {
         childrenNode = children[0];
@@ -462,9 +506,9 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
     // Builds JSX into:
     // Production: React.jsx(type, arguments, key)
     // Development: React.jsxDEV(type, arguments, key, isStaticChildren, source, self)
-    function buildJSXElementCall(path, file) {
+    function buildJSXElementCall(path: NodePath<JSXElement>, file: PluginPass) {
       const openingPath = path.get("openingElement");
-      const args = [getTag(openingPath)];
+      const args: t.Expression[] = [getTag(openingPath)];
 
       const attribsArray = [];
       const extracted = Object.create(null);
@@ -507,7 +551,8 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
       if (attribsArray.length || children.length) {
         attribs = buildJSXOpeningElementAttributes(
           attribsArray,
-          file,
+          //@ts-expect-error The children here contains JSXSpreadChild,
+          // which will be thrown later
           children,
         );
       } else {
@@ -536,7 +581,10 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
 
     // Builds props for React.jsx. This function adds children into the props
     // and ensures that props is always an object
-    function buildJSXOpeningElementAttributes(attribs, file, children) {
+    function buildJSXOpeningElementAttributes(
+      attribs: NodePath<JSXAttribute | JSXSpreadAttribute>[],
+      children: Expression[],
+    ) {
       const props = attribs.reduce(accumulateAttribute, []);
 
       // In React.jsx, children is no longer a separate argument, but passed in
@@ -551,14 +599,25 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
     // Builds JSX Fragment <></> into
     // Production: React.jsx(type, arguments)
     // Development: React.jsxDEV(type, { children })
-    function buildJSXFragmentCall(path, file) {
+    function buildJSXFragmentCall(
+      path: NodePath<JSXFragment>,
+      file: PluginPass,
+    ) {
       const args = [get(file, "id/fragment")()];
 
       const children = t.react.buildChildren(path.node);
 
       args.push(
         t.objectExpression(
-          children.length > 0 ? [buildChildrenProperty(children)] : [],
+          children.length > 0
+            ? [
+                buildChildrenProperty(
+                  //@ts-expect-error The children here contains JSXSpreadChild,
+                  // which will be thrown later
+                  children,
+                ),
+              ]
+            : [],
         ),
       );
 
@@ -574,7 +633,10 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
 
     // Builds JSX Fragment <></> into
     // React.createElement(React.Fragment, null, ...children)
-    function buildCreateElementFragmentCall(path, file) {
+    function buildCreateElementFragmentCall(
+      path: NodePath<JSXFragment>,
+      file: PluginPass,
+    ) {
       if (filter && !filter(path.node, file)) return;
 
       return call(file, "createElement", [
@@ -587,7 +649,10 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
     // Builds JSX into:
     // Production: React.createElement(type, arguments, children)
     // Development: React.createElement(type, arguments, children, source, self)
-    function buildCreateElementCall(path, file) {
+    function buildCreateElementCall(
+      path: NodePath<JSXElement>,
+      file: PluginPass,
+    ) {
       const openingPath = path.get("openingElement");
 
       return call(file, "createElement", [
@@ -597,21 +662,21 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
           path,
           openingPath.get("attributes"),
         ),
+        // @ts-expect-error JSXSpreadChild has been transformed in convertAttributeValue
         ...t.react.buildChildren(path.node),
       ]);
     }
 
-    function getTag(openingPath) {
+    function getTag(openingPath: NodePath<JSXOpeningElement>) {
       const tagExpr = convertJSXIdentifier(
         openingPath.node.name,
         openingPath.node,
       );
 
-      let tagName;
+      let tagName: string;
       if (t.isIdentifier(tagExpr)) {
         tagName = tagExpr.name;
-      } else if (t.isLiteral(tagExpr)) {
-        // @ts-expect-error todo(flow->ts) value in missing for NullLiteral
+      } else if (t.isStringLiteral(tagExpr)) {
         tagName = tagExpr.value;
       }
 
@@ -628,7 +693,11 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
      * breaking on spreads, we then push a new object containing
      * all prior attributes to an array for later processing.
      */
-    function buildCreateElementOpeningElementAttributes(file, path, attribs) {
+    function buildCreateElementOpeningElementAttributes(
+      file: PluginPass,
+      path: NodePath<JSXElement>,
+      attribs: NodePath<JSXAttribute | JSXSpreadAttribute>[],
+    ) {
       const runtime = get(file, "runtime");
       if (!process.env.BABEL_8_BREAKING) {
         if (runtime !== "automatic") {
@@ -659,7 +728,17 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
           }
 
           if (objs.length === 1) {
-            return objs[0];
+            if (
+              !(
+                t.isSpreadElement(props[0]) &&
+                // If an object expression is spread element's argument
+                // it is very likely to contain __proto__ and we should stop
+                // optimizing spread element
+                t.isObjectExpression(props[0].argument)
+              )
+            ) {
+              return objs[0];
+            }
           }
 
           // looks like we have multiple objects
@@ -676,7 +755,7 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
         }
       }
 
-      const props = [];
+      const props: ObjectExpression["properties"] = [];
       const found = Object.create(null);
 
       for (const attr of attribs) {
@@ -696,7 +775,12 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
         accumulateAttribute(props, attr);
       }
 
-      return props.length === 1 && t.isSpreadElement(props[0])
+      return props.length === 1 &&
+        t.isSpreadElement(props[0]) &&
+        // If an object expression is spread element's argument
+        // it is very likely to contain __proto__ and we should stop
+        // optimizing spread element
+        !t.isObjectExpression(props[0].argument)
         ? props[0].argument
         : props.length > 0
         ? t.objectExpression(props)
@@ -704,7 +788,7 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
     }
   });
 
-  function getSource(source, importName) {
+  function getSource(source: string, importName: string) {
     switch (importName) {
       case "Fragment":
         return `${source}/${development ? "jsx-dev-runtime" : "jsx-runtime"}`;
@@ -718,7 +802,12 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
     }
   }
 
-  function createImportLazily(pass, path, importName, source) {
+  function createImportLazily(
+    pass: PluginPass,
+    path: NodePath<Program>,
+    importName: string,
+    source: string,
+  ): () => Identifier | MemberExpression {
     return () => {
       const actualSource = getSource(source, importName);
       if (isModule(path)) {
@@ -749,20 +838,25 @@ You can set \`throwIfNamespace: false\` to bypass this warning.`,
   }
 }
 
-function toMemberExpression(id) {
-  return id
-    .split(".")
-    .map(name => t.identifier(name))
-    .reduce((object, property) => t.memberExpression(object, property));
+function toMemberExpression(id: string): Identifier | MemberExpression {
+  return (
+    id
+      .split(".")
+      .map(name => t.identifier(name))
+      // @ts-expect-error - The Array#reduce does not have a signature
+      // where the type of initialial value differs from callback return type
+      .reduce((object, property) => t.memberExpression(object, property))
+  );
 }
 
-function makeSource(path, state) {
+function makeSource(path: NodePath, state: PluginPass) {
   const location = path.node.loc;
   if (!location) {
     // the element was generated and doesn't have location information
     return path.scope.buildUndefinedNode();
   }
 
+  // @ts-expect-error todo: avoid mutating PluginPass
   if (!state.fileNameIdentifier) {
     const { filename = "" } = state;
 
@@ -774,17 +868,25 @@ function makeSource(path, state) {
         init: t.stringLiteral(filename),
       });
     }
+    // @ts-expect-error todo: avoid mutating PluginPass
     state.fileNameIdentifier = fileNameIdentifier;
   }
 
   return makeTrace(
-    t.cloneNode(state.fileNameIdentifier),
+    t.cloneNode(
+      // @ts-expect-error todo: avoid mutating PluginPass
+      state.fileNameIdentifier,
+    ),
     location.start.line,
     location.start.column,
   );
 }
 
-function makeTrace(fileNameIdentifier, lineNumber, column0Based) {
+function makeTrace(
+  fileNameIdentifier: Identifier,
+  lineNumber?: number,
+  column0Based?: number,
+) {
   const fileLineLiteral =
     lineNumber != null ? t.numericLiteral(lineNumber) : t.nullLiteral();
 
@@ -810,7 +912,7 @@ function makeTrace(fileNameIdentifier, lineNumber, column0Based) {
   ]);
 }
 
-function sourceSelfError(path, name) {
+function sourceSelfError(path: NodePath, name: string) {
   const pluginName = `transform-react-jsx-${name.slice(2)}`;
 
   return path.buildCodeFrameError(
